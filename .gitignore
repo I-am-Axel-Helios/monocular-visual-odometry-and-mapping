@@ -1,0 +1,22 @@
+# Fichiers générés par CMake / Visual Studio.
+# Ils peuvent être recréés à partir du code source.
+build/
+
+# Bibliothèques installées localement par vcpkg.
+# Elles seront recréées à partir de vcpkg.json.
+vcpkg_installed/
+
+# Fichiers temporaires propres à Visual Studio.
+.vs/
+
+# Fichiers de compilation C/C++.
+*.obj
+*.exe
+*.pdb
+*.ilk
+
+# Données volumineuses téléchargées localement.
+data/
+
+# Résultats produits par nos expérimentations.
+results/
