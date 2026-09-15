@@ -202,23 +202,80 @@ int main(int argc, char* argv[])
     );
 
 
+    // ----------------------------------------------------------------
+    // Préparation des correspondances géométriques
+    //
+    // findFundamentalMat ne travaille pas directement avec DMatch
+    // Il lui faut les coordonnées 2D des points correspondants
+    // ----------------------------------------------------------------
+
+    std::vector<cv::Point2f> points1;
+    std::vector<cv::Point2f> points2;
+
+    points1.reserve(goodMatches.size());
+    points2.reserve(goodMatches.size());
+
+    for (const cv::DMatch& match : goodMatches)
+    {
+        // queryIdx -> point dans l'image 1
+        // trainIdx -> point correspondant dans l'image 2
+        points1.push_back(
+            keypoints1[match.queryIdx].pt
+        );
+
+        points2.push_back(
+            keypoints2[match.trainIdx].pt
+        );
+    }
+
+
     // ---------------------------------------------------------
-    // Conservation des meilleurs matches pour l'affichage
+    // Estimation robuste de la matrice fondamentale avec RANSAC
     // 
-    // On ne jette pas encore les autres de manière définitive.
-    // On veut juste une image lisible.
+    // fundamentalMask contiendra pour chaque correspondance :
+    //  1 -> inlier, compatible avec la géometrie estimée
+    //  0 -> outlier, rejetée
     // ---------------------------------------------------------
 
-    const std::size_t numberOfMatchesToDisplay = 
-        std::min<std::size_t>(100, goodMatches.size());
+    cv::Mat fundamentalMask;
+    cv::Mat fundamentalMatrix = cv::findFundamentalMat(
+        points1,
+        points2,
 
-    std::vector<cv::DMatch> bestMatches(
-        goodMatches.begin(),
-        goodMatches.begin() + numberOfMatchesToDisplay
+        // RANSAC permet d'estimer F malgré la présence d'outliers.
+        cv::FM_RANSAC,
+
+        // Distance minimale, en pixels, pour considérer qu'un point
+        // respecte suffisamment la contraite épipolaire.
+        1.5,
+
+        // Niveau de confiance demandé à RANSAC.
+        0.99,
+
+        fundamentalMask
     );
 
-    std::cout << "Matches displayed: "
-              << bestMatches.size()
+
+    // ---------------------------------------------------------
+    // Conservation uniquement des matches validés par RANSAC
+    // ---------------------------------------------------------
+
+    std::vector<cv::DMatch> inliersMatches;
+
+    for (std::size_t i = 0; i < goodMatches.size(); ++i)
+    {
+        if (fundamentalMask.at<uchar>(static_cast<int>(i)) != 0)
+        {
+            inliersMatches.push_back(goodMatches[i]);
+        }
+    }
+
+    std::cout << "Matches before RANSAC: "
+              << goodMatches.size()
+              << '\n';
+
+    std::cout << "Geometric inliers: "
+              << inliersMatches.size()
               << '\n';
 
     // -------------------------------------------------------
@@ -234,7 +291,7 @@ int main(int argc, char* argv[])
         keypoints1,
         image2,
         keypoints2,
-        bestMatches,
+        inliersMatches,
         visualization
     );
 
