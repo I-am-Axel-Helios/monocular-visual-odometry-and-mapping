@@ -1,8 +1,9 @@
+#include <algorithm>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include <opencv2/opencv.hpp>
-#include <vector>
 
 
 int main(int argc, char* argv[])
@@ -12,42 +13,50 @@ int main(int argc, char* argv[])
     // argv contient les arguments eux-mêmes
     // 
     // argv[0] = nom du programme
-    // argv[1] = chemin de l'image fourni dans le terminal
-    if (argc < 2)
+    // argv[1] = première image
+    // argv[2] = deuxième image
+    if (argc < 3)
     {
-        std::cerr << "Usage: monocular_visual_odometry <image_path>\n";
+        std::cerr << "Usage: monocular_visual_odometry "
+                  << "<image_1> <image_2>\n";
         return 1;
     }
     
-    // Chemin donné par l'utilisateur
-    const std::string imagePath = argv[1];
+    // Chemins donnés par l'utilisateur
+    const std::string imagePath1 = argv[1];
+    const std::string imagePath2 = argv[2];
 
     // Chargement en niveau de gris
     //
     // Une image en bdg ne contient qu'un canal d'intensité, contrairement à une image couleur
     // contenant généralement 3 canaux RGB dans OpenCV.
-    cv::Mat image = cv::imread(
-        imagePath,
+    cv::Mat image1 = cv::imread(
+        imagePath1,
+        cv::IMREAD_GRAYSCALE
+    );
+
+    cv::Mat image2 = cv::imread(
+        imagePath2,
         cv::IMREAD_GRAYSCALE
     );
 
 
-    // SI OpenCV n'a pas réussi à charger l'image, cv::Mat sera vide.
-    if (image.empty())
+    // SI OpenCV n'a pas réussi à charger les images, cv::Mat sera vide.
+    if (image1.empty() || image2.empty())
     {
-        std::cerr << "Error: could not load image: "
-                  << imagePath << '\n';
-
+        std::cerr << "Error: could not load one or both images.\n";
         return 1;
     }
 
-    std::cout << "Image loaded successfully.\n";
+    std::cout << "Images loaded successfully.\n";
 
     // image.cols = largeur
     // image.rows = hauteur
-    std::cout << "Resolution: "
-              << image.cols << " x "
-              << image.rows << '\n';
+    std::cout << "Image 1: "
+              << image1.cols << " x " << image1.rows << '\n';
+
+    std::cout << "Image 2: "
+              << image2.cols << " x " << image2.rows << '\n';
 
 
     // ------------------------------------------
@@ -68,14 +77,16 @@ int main(int argc, char* argv[])
     //  - sa taille
     //  - son orientation
     //  - une mesure de sa qualité ("response")
-    std::vector<cv::KeyPoint> keypoints;
+    std::vector<cv::KeyPoint> keypoints1;
+    std::vector<cv::KeyPoint> keypoints2;
 
 
     // Cette matrice contiendra les descripteurs ORB.
     //
     // Chaque ligne correspondra à un keypoint.
     // Pour ORB, un descripteur fait 32 octets = 256 bits.
-    cv::Mat descriptors;
+    cv::Mat descriptors1;
+    cv::Mat descriptors2;
 
 
     // detectAndCompute réalise 2 opérations :
@@ -86,35 +97,138 @@ int main(int argc, char* argv[])
     // cv::noArray() signifie qu'on n'utilise aucun masque :
     // toute l'image peut être analysée.
     orb->detectAndCompute(
-        image,
+        image1,
         cv::noArray(),
-        keypoints,
-        descriptors
+        keypoints1,
+        descriptors1
     );
 
 
-    std::cout << "ORB keypoints detected: " 
-              << descriptors.rows
-              << " x "
-              << descriptors.cols
+    orb->detectAndCompute(
+        image2,
+        cv::noArray(),
+        keypoints2,
+        descriptors2
+    );
+
+
+    std::cout << "Image 1 keypoints: " 
+              << keypoints1.size()
               << '\n';
 
-    // Image qui contiendra l'image originale et les points ORB dessinés
-    cv::Mat visualization;
+    std::cout << "Image 2 keypoints: "
+              << keypoints2.size()
+              << '\n';
 
 
-    // Dessine les keypoints détectés
+    // -------------------------------------------------------
+    // Création du matcher
     // 
-    // DRAW_RICH_KEYPOINTS permet notamment de visualiser leur taaille et leur orientation
-    cv::drawKeypoints(
-        image,
-        keypoints,
-        visualization,
-        cv::Scalar::all(-1),
-        cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS
+    // BFMatcher = Brute-Force Matcher
+    // 
+    // Pour chaque descripteur de l'image 1, il compare les
+    // descripteurs de l'image 2 afin de trouver le plus proche
+    // 
+    // ORB fournit des descripteurs binaires.
+    // Donc on utilisera la distance de Hamming.
+    // 
+    // true = crossCheck;
+    // A doit choisir B ET B doit choisir A.
+    // Cela élimine déjà beaucoup de mauvaises correspondances.
+    // --------------------------------------------------------
+    
+    cv::BFMatcher matcher(
+        cv::NORM_HAMMING,
+        true
     );
 
-    cv::imshow("ORB keypoints", visualization);
+    std::vector<cv::DMatch> matches;
+
+    matcher.match(
+        descriptors1,
+        descriptors2,
+        matches
+    );
+
+    std::cout << "Raw matches: "
+              << matches.size()
+              << '\n';
+
+    // ---------------------------------------------------------
+    // Tri des correspondances
+    // 
+    //  Une petite distance = deux descripteurs très similaires.
+    // 
+    // On place donc les meilleurs matches en premier.
+    // ---------------------------------------------------------
+
+    std::sort(
+        matches.begin(),
+        matches.end(),
+        [](const cv::DMatch& a, const cv::DMatch& b)
+        {
+            return a.distance < b.distance;
+        }
+    );
+
+
+    // ---------------------------------------------------------
+    // Conservation des meilleurs matches pour l'affichage
+    // 
+    // On ne jette pas encore les autres de manière définitive.
+    // On veut juste une image lisible.
+    // ---------------------------------------------------------
+
+    const std::size_t numberOfMatchesToDisplay = 
+        std::min<std::size_t>(100, matches.size());
+
+    std::vector<cv::DMatch> bestMatches(
+        matches.begin(),
+        matches.begin() + numberOfMatchesToDisplay
+    );
+
+    std::cout << "Matches displayed: "
+              << bestMatches.size()
+              << '\n';
+
+    // -------------------------------------------------------
+    // Visualisation
+    // 
+    // drawMatches place les deux images côte à côte et relie
+    // chaque paire de points correspondants par une ligne.
+    // ------------------------------------------------------- 
+    cv::Mat visualization;
+
+    cv::drawMatches(
+        image1,
+        keypoints1,
+        image2,
+        keypoints2,
+        bestMatches,
+        visualization
+    );
+
+
+    // Réduction de la visualisation pour l'adapter à mon PC
+    const int displayWidth = 1100;
+
+    // Facteur d'échelle pour mon PC
+    const double scale =
+        static_cast<double>(displayWidth) / visualization.cols;
+
+    // Conservation du rapport largeur/hauteur
+    const int displayHeight = 
+    static_cast<int>(visualization.rows * scale);
+
+    cv::Mat resizedVisualization;
+
+    cv::resize(
+        visualization,
+        resizedVisualization,
+        cv::Size(displayWidth, displayHeight)
+    );
+
+    cv::imshow("ORB feature matches", resizedVisualization);
 
     // Attend qu'une touche soit pressée
     cv::waitKey(0);
