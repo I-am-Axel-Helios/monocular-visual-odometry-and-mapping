@@ -1,52 +1,59 @@
 #include <iostream>
+#include <string>
 
-// OpenCV
 #include <opencv2/opencv.hpp>
 
-// Eigen : bibliothèque d'algèbre linéaire
-#include <Eigen/Dense>
 
-int main()
+int main(int argc, char* argv[])
 {
     std::cout << "=== Monocular Visual Odometry and Mapping ===\n\n";
+    // argc contient le nombre d'arguments passés au programme
+    // argv contient les arguments eux-mêmes
+    // 
+    // argv[0] = nom du programme
+    // argv[1] = chemin de l'image fourni dans le terminal
+    if (argc < 2)
+    {
+        std::cerr << "Usage: monocular_visual_odometry <image_path>\n";
+        return 1;
+    }
+    
+    // Chemin donné par l'utilisateur
+    const std::string imagePath = argv[1];
 
-    // ------------------------------------------------------------
-    // Test 1 : vérifier que notre programme utilise bien OpenCV.
-    // CV_VERSION est une constante fournie par OpenCV.
-    // ------------------------------------------------------------
-    std::cout << "OpenCV version : "
-              << CV_VERSION
-              << '\n';
-
-    // ------------------------------------------------------------
-    // Test 2 : vérifier qu'Eigen fonctionne.
+    // Chargement en niveau de gris
     //
-    // Matrix3d signifie :
-    //      Matrix -> matrice
-    //      3      -> 3 lignes / 3 colonnes
-    //      d      -> valeurs de type double
-    //
-    // Ici nous construisons une matrice 3x3 comparable à une
-    // matrice intrinsèque de caméra K.
-    // ------------------------------------------------------------
-    Eigen::Matrix3d K;
+    // Une image en bdg ne contient qu'un canal d'intensité, contrairement à une image couleur
+    // contenant généralement 3 canaux RGB dans OpenCV.
+    cv::Mat image = cv::imread(
+        imagePath,
+        cv::IMREAD_GRAYSCALE
+    );
 
-    K << 718.856, 0.0,     607.1928,
-         0.0,     718.856, 185.2157,
-         0.0,     0.0,     1.0;
 
-    std::cout << "\nCamera matrix K:\n";
-    std::cout << K << '\n';
+    // SI OpenCV n'a pas réussi à charger l'image, cv::Mat sera vide.
+    if (image.empty())
+    {
+        std::cerr << "Error: could not load image: "
+                  << imagePath << '\n';
 
-    // ------------------------------------------------------------
-    // Calcul simple avec Eigen :
-    // déterminant de la matrice.
-    // Le but est seulement de vérifier que les opérations
-    // mathématiques d'Eigen sont réellement disponibles.
-    // ------------------------------------------------------------
-    std::cout << "\ndet(K) = "
-              << K.determinant()
-              << '\n';
+        return 1;
+    }
+
+    std::cout << "Image loaded successfully.\n";
+
+    // image.cols = largeur
+    // image.rows = hauteur
+    std::cout << "Resolution: "
+              << image.cols << " x "
+              << image.rows << '\n';
+
+    // Affiche l'image dans une fenêtre OpenCV
+    cv::imshow("Input image", image);
+
+    // Attend qu'une touche soit pressée
+    cv::waitKey(0);
 
     return 0;
+
 }
