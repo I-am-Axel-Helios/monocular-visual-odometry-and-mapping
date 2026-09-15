@@ -8,7 +8,7 @@
 
 int main(int argc, char* argv[])
 {
-    std::cout << "=== Monocular Visual Odometry and Mapping ===\n\n";
+    std::cout << "\n\n=== Monocular Visual Odometry and Mapping ===\n\n";
     // argc contient le nombre d'arguments passés au programme
     // argv contient les arguments eux-mêmes
     // 
@@ -121,38 +121,68 @@ int main(int argc, char* argv[])
               << '\n';
 
 
-    // -------------------------------------------------------
-    // Création du matcher
+    // ------------------------------------------------------------
+    // Matching KNN des descripteurs ORB
     // 
-    // BFMatcher = Brute-Force Matcher
+    // Au lieu de demander uniquement le MEILLEUR candidat,
+    // on va demander les 2 meilleurs candidats pour chaque 
+    // descripteur de l'image 1.
     // 
-    // Pour chaque descripteur de l'image 1, il compare les
-    // descripteurs de l'image 2 afin de trouver le plus proche
-    // 
-    // ORB fournit des descripteurs binaires.
-    // Donc on utilisera la distance de Hamming.
-    // 
-    // true = crossCheck;
-    // A doit choisir B ET B doit choisir A.
-    // Cela élimine déjà beaucoup de mauvaises correspondances.
-    // --------------------------------------------------------
+    // crossCheck doit être desactivé pour utiliser cette stratégie.
+    // ------------------------------------------------------------
     
     cv::BFMatcher matcher(
         cv::NORM_HAMMING,
-        true
+        false
     );
 
-    std::vector<cv::DMatch> matches;
+    // Pour chaque descripteur de l'image 1,
+    // nous allons recevoir jusqu'à 2 candidats dans l'image 2.
+    std::vector<std::vector<cv::DMatch>> knnMatches;
 
-    matcher.match(
+    matcher.knnMatch(
         descriptors1,
         descriptors2,
-        matches
+        knnMatches,
+        2
     );
 
-    std::cout << "Raw matches: "
-              << matches.size()
+    std::cout << "KNN match groups: "
+              << knnMatches.size()
               << '\n';
+
+
+    // ---------------------------------------------------------
+    // Lowe ratio test
+    // ---------------------------------------------------------
+
+    const float ratioThreshold = 0.75f;
+
+    std::vector<cv::DMatch> goodMatches;
+
+    for (const auto& candidates : knnMatches)
+    {
+        // Il faut au moins 2 candidats pour calculer le ratio.
+        if (candidates.size() < 2)
+        {
+            continue;
+        }
+
+        const cv::DMatch& bestMatch = candidates[0];
+        const cv::DMatch& secondMatch = candidates[1];
+
+        // On garde le meilleur candidat uniquement s'il est 
+        // nettement meilleur que le deuxieme
+        if (bestMatch.distance < ratioThreshold * secondMatch.distance)
+        {
+            goodMatches.push_back(bestMatch);
+        }
+    }
+
+    std::cout << "Matches after ratio test: "
+              << goodMatches.size()
+              << '\n';
+
 
     // ---------------------------------------------------------
     // Tri des correspondances
@@ -163,8 +193,8 @@ int main(int argc, char* argv[])
     // ---------------------------------------------------------
 
     std::sort(
-        matches.begin(),
-        matches.end(),
+        goodMatches.begin(),
+        goodMatches.end(),
         [](const cv::DMatch& a, const cv::DMatch& b)
         {
             return a.distance < b.distance;
@@ -180,11 +210,11 @@ int main(int argc, char* argv[])
     // ---------------------------------------------------------
 
     const std::size_t numberOfMatchesToDisplay = 
-        std::min<std::size_t>(100, matches.size());
+        std::min<std::size_t>(100, goodMatches.size());
 
     std::vector<cv::DMatch> bestMatches(
-        matches.begin(),
-        matches.begin() + numberOfMatchesToDisplay
+        goodMatches.begin(),
+        goodMatches.begin() + numberOfMatchesToDisplay
     );
 
     std::cout << "Matches displayed: "
