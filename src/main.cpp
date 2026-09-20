@@ -674,7 +674,20 @@ int main(int argc, char* argv[])
     // --------------------------------------------------------
     std::vector<cv::Point3d> triangulatedPoints;
 
+    // Observations 2D correspondant exactement aux points 3D
+    // qui ont survécu à tous nos filtres
+    std::vector<cv::Point2f> validTriangulationPoints1;
+    std::vector<cv::Point2f> validTriangulationPoints2;
+
     triangulatedPoints.reserve(
+        homogeneousPoints4D64.cols
+    );
+
+    validTriangulationPoints1.reserve(
+        homogeneousPoints4D64.cols
+    ); 
+    
+    validTriangulationPoints2.reserve(
         homogeneousPoints4D64.cols
     );
 
@@ -724,6 +737,14 @@ int main(int argc, char* argv[])
             y,
             z
         );
+
+        validTriangulationPoints1.push_back(
+            triangulationPoints1[i]
+        );
+
+        validTriangulationPoints2.push_back(
+            triangulationPoints2[i]
+        );
     }
 
     std::cout << "\n=== Triangulation ===\n\n";
@@ -756,6 +777,135 @@ int main(int argc, char* argv[])
                   << point.z
                   << "]\n";
     }
+
+    // -------------------------------------------------------
+    // Calcul des erreurs de reprojection
+    // 
+    // Pour chaque point 3D reconstruit, on utilise P1 & P2 
+    // pour prédire sa position dans chacune des images.
+    // 
+    // On compare ensuite cette prédiction aux coordonnées 2D 
+    // réellement observées.
+    // -------------------------------------------------------
+    double totalSquaredReprojectionError = 0.0;
+    double maximumReprojectionError = 0.0;
+
+    for (std::size_t i = 0; i < triangulatedPoints.size(); ++i)
+    {
+        const cv::Point3d& point3D = 
+            triangulatedPoints[i];
+
+
+        // Coordonnées homogènes du point 3D :
+        // 
+        // [ X ]
+        // [ Y ]
+        // [ Z ]
+        // [ 1 ]
+        //
+        cv::Mat homogeneousPoint =
+            (cv::Mat_<double>(4, 1)
+                << point3D.x,
+                   point3D.y,
+                   point3D.z,
+                   1.0);
+
+        // Projection dans la 1ère image
+        cv::Mat projected1 =
+            projectionMatrix1 * homogeneousPoint;
+
+        // Projection dans la 2nde image
+        cv::Mat projected2 =
+            projectionMatrix2 * homogeneousPoint;
+
+        // Passage :
+        //
+        // (uh, vh, wh)
+        // 
+        // vers
+        // 
+        // (u, v) = (uh / wh, vh / wh)
+        const double u1 =
+            projected1.at<double>(0, 0) / projected1.at<double>(2, 0);
+
+        const double v1 = 
+            projected1.at<double>(1, 0) / projected1.at<double>(2, 0);
+
+        const double u2 =
+            projected2.at<double>(0, 0) / projected2.at<double>(2, 0);
+
+        const double v2 =
+            projected2.at<double>(1, 0) / projected2.at<double>(2, 0);
+
+
+        // Observations réellement détectées dans les images.
+        const cv::Point2f& observed1 =
+            validTriangulationPoints1[i];
+
+        const cv::Point2f& observed2 =
+            validTriangulationPoints2[i];
+
+
+        // Distance euclidienne en pixels entre
+        // projection prédite et observation réelle.
+        const double error1 = 
+            std::hypot(
+                u1 - observed1.x,
+                v1 - observed1.y
+            );
+
+        const double error2 =
+            std::hypot(
+                u2 - observed2.x,
+                v2 - observed2.y
+            );
+        
+
+        totalSquaredReprojectionError +=
+            error1 * error1 +
+            error2 * error2;
+
+        maximumReprojectionError = 
+            std::max(
+                maximumReprojectionError,
+                std::max(error1, error2)
+            );
+
+        std::cout << "Point "
+                  << i
+                  << " reprojection errors: "
+                  << error1
+                  << " px / "
+                  << error2
+                  << " px\n";
+    }
+
+    double reprojectionRms = 0.0;
+
+    if (!triangulatedPoints.empty())
+    {
+        reprojectionRms = 
+            std::sqrt(
+                totalSquaredReprojectionError /
+                (
+                    2.0 * static_cast<double>(
+                        triangulatedPoints.size()
+                        )
+                    )
+            );
+    }
+
+    std::cout << "\n=== 3D reconstruction quality ===\n";
+
+    std::cout << "Reprojection RMS: "
+              << reprojectionRms
+              << " px\n";
+
+    std::cout << "Maximum reprojection error: "
+              << maximumReprojectionError
+              << " px\n";
+
+
 
     // --------------------------------------------------------
     // Visualisation
