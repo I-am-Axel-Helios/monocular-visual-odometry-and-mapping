@@ -24,15 +24,17 @@ int main(int argc, char* argv[])
     //
     // Exemple : camera_calibration data/calibration
     // --------------------------------------------------------------------
-
-    if (argc < 2)
+    if (argc < 3)
     {
-        std::cerr << "Usage: camera_calibration <calibration_directory>\n";
+        std::cerr << "Usage: camera_calibration "
+                  << "<calibration_directory> "
+                  << "<output_calibration_file>\n";
 
         return 1;
     }
 
     const fs::path calibrationDirectory = argv[1];
+    const fs::path outputPath = argv[2];
 
     if (!fs::exists(calibrationDirectory)) 
     {
@@ -235,8 +237,18 @@ int main(int argc, char* argv[])
 
 
     // Dossier de diagnostic, pour sauvegarder les images avec les coins dessinés
+    // 
+    // Exemple: outputPath = config/camera_calibration_1080x810.yaml
+    //
+    // outputPath.stem() va donc donner: camera_calibration_1080x810
+    //
+    // Les visualisations seront donc enregistrées dans: 
+    // results/calibration/camera_calibration_photo_1080x810/detections/
+    const fs::path calibrationResultDirectory =
+        fs::path("results") / "calibration" / outputPath.stem();
+
     const fs::path detectionOutputDirectory =
-        fs::path("results") / "calibration_detections";
+        calibrationResultDirectory / "detections";
 
     fs::create_directories(
         detectionOutputDirectory
@@ -435,9 +447,10 @@ int main(int argc, char* argv[])
     // Meilleure approximation possible (faire sauter le coefficient radial k3)
     const int calibrationFlags = cv::CALIB_FIX_K3;
 
-    // Pour voir si annuler k3 et la distorsion tangentielle reussissent à expliquer quasiment toutes les observations 
+    // Pour voir si annuler k3 et la distorsion tangentielle reussissent à 
+    // expliquer quasiment toutes les observations (spoiler : non, la RMS et le
+    // K driftent trop loin par rapport au modèle avec k3=0 seul)
     // const int calibrationFlags = cv::CALIB_FIX_K3 | cv::CALIB_ZERO_TANGENT_DIST;
-
 
     const double calibrationRms =
         cv::calibrateCamera(
@@ -547,22 +560,28 @@ int main(int argc, char* argv[])
         << " px\n";
 
 
-    // --------------------------------------------------
+    // -------------------------------------------------------
     // Sauvegarde de la calibration
-    // --------------------------------------------------
-    const fs::path configDirectory = "config";
+    // 
+    // outputPath est fourni par l'utilisateur au lancement du
+    // programme. Cela permet au même outil de produire 
+    // plusieurs calibrations sans écraser les précédentes.
+    // --------------------------------------------------------
 
-    fs::create_directories(
-        configDirectory
-    );
-
-    const fs::path outputPath =
-        configDirectory / "camera_calibration.yaml";
+    // Crée automatiquement le dossier parent s'il n'existe pas
+    if (outputPath.has_parent_path())
+    {
+        fs::create_directories(
+            outputPath.parent_path()
+        );
+    }
 
     cv::FileStorage file(
         outputPath.string(),
         cv::FileStorage::WRITE
     );
+
+    
 
     if (!file.isOpened())
     {
@@ -628,8 +647,8 @@ int main(int argc, char* argv[])
         << outputPath.string()
         << '\n';
 
-    std::cout << "Corner visualizations saved to: "
-        << detectionOutputDirectory.string()
+    std::cout << "Calibration diagnostics saved to: "
+        << calibrationResultDirectory.string()
         << '\n';
 
     return 0;

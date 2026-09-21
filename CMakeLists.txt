@@ -57,3 +57,35 @@ target_link_libraries(
         ${OpenCV_LIBS}
         Eigen3::Eigen
 )
+
+
+# ------------------------------------------------------------
+# Camera calibration utilities
+# ------------------------------------------------------------
+
+add_executable(
+    camera_calibration
+    tools/camera_calibration.cpp
+)
+
+target_link_libraries(
+    camera_calibration
+    PRIVATE
+        ${OpenCV_LIBS}
+)
+
+
+# ------------------------------------------------------------
+# Video frame extraction utility
+# ------------------------------------------------------------
+
+add_executable(
+    extract_video_frames
+    tools/extract_video_frames.cpp
+)
+
+target_link_libraries(
+    extract_video_frames
+    PRIVATE
+        ${OpenCV_LIBS}
+)
