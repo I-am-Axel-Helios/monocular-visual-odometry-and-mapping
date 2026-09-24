@@ -62,7 +62,6 @@ target_link_libraries(
 # ------------------------------------------------------------
 # Camera calibration utilities
 # ------------------------------------------------------------
-
 add_executable(
     camera_calibration
     tools/camera_calibration.cpp
@@ -78,7 +77,6 @@ target_link_libraries(
 # ------------------------------------------------------------
 # Video frame extraction utility
 # ------------------------------------------------------------
-
 add_executable(
     extract_video_frames
     tools/extract_video_frames.cpp
@@ -94,7 +92,6 @@ target_link_libraries(
 # ------------------------------------------------------------
 # Video monocular visual odometry
 # ------------------------------------------------------------
-
 add_executable(
     video_visual_odometry
     src/video_visual_odometry.cpp
@@ -105,4 +102,19 @@ target_link_libraries(
     PRIVATE
         ${OpenCV_LIBS}
         Eigen3::Eigen
+)
+
+
+# ------------------------------------------------------------
+# Trajectory visualization utility
+# ------------------------------------------------------------
+add_executable(
+    visualize_trajectory
+    tools/visualize_trajectory.cpp
+)
+
+target_link_libraries(
+    visualize_trajectory
+    PRIVATE
+        ${OpenCV_LIBS}
 )
