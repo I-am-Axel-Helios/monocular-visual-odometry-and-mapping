@@ -89,3 +89,20 @@ target_link_libraries(
     PRIVATE
         ${OpenCV_LIBS}
 )
+
+
+# ------------------------------------------------------------
+# Video monocular visual odometry
+# ------------------------------------------------------------
+
+add_executable(
+    video_visual_odometry
+    src/video_visual_odometry.cpp
+)
+
+target_link_libraries(
+    video_visual_odometry
+    PRIVATE
+        ${OpenCV_LIBS}
+        Eigen3::Eigen
+)
