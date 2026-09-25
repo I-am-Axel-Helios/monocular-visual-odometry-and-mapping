@@ -118,3 +118,19 @@ target_link_libraries(
     PRIVATE
         ${OpenCV_LIBS}
 )
+
+
+# ------------------------------------------------------------
+# Map-based monocular visaul odometry
+# ------------------------------------------------------------
+add_executable(
+    map_visual_odometry
+    src/map_visual_odometry.cpp
+)
+
+target_link_libraries(
+    map_visual_odometry
+    PRIVATE
+        ${OpenCV_LIBS}
+        Eigen3::Eigen
+)
