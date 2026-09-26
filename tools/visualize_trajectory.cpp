@@ -24,6 +24,37 @@ struct TrajectoryPoint
 };
 
 
+std::string getTrajectoryDisplayName(
+	const fs::path& csvPath
+)
+{
+	const std::string filename = csvPath.stem().string();
+
+	if (filename.find("map_based") != std::string::npos)
+	{
+		return "Map_based monocular VO";
+	}
+
+	if (filename.find("pairwise") != std::string::npos)
+	{
+		return "Pairwise monocular VO";
+	}
+
+
+	// Cas générique si on ajoute d'autres types de trajectoires
+	std::string name = filename;
+
+	std::replace(
+		name.begin(),
+		name.end(),
+		'_',
+		' '
+	);
+
+	return name;
+}
+
+
 int main(int argc, char* argv[])
 {
 	cv::utils::logging::setLogLevel(
@@ -39,6 +70,11 @@ int main(int argc, char* argv[])
 
 	const fs::path inputCsvPath = argv[1];
 	const fs::path outputImagePath = argv[2];
+
+	const std::string trajectoryDisplayName = 
+		getTrajectoryDisplayName(
+			inputCsvPath
+		);
 
 
 	// ------------------------------------------------------------
@@ -372,7 +408,7 @@ int main(int argc, char* argv[])
 
 	cv::putText(
 		visualization,
-		"Pairwise monocular VO - X/Z trajectory",
+		trajectoryDisplayName + " - X/Z trajectory",
 		cv::Point(25, 35),
 		cv::FONT_HERSHEY_SIMPLEX,
 		0.8,
@@ -407,7 +443,7 @@ int main(int argc, char* argv[])
 
 	// Affichage à l'écran
 	cv::imshow(
-		"Pairwise VO trajectory",
+		trajectoryDisplayName,
 		visualization
 	);
 
