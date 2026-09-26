@@ -200,6 +200,33 @@ int addNewMapPointsBetweenKeyframes(
     const cv::Mat projectionCurrent =
         cameraMatrix * currentExtrinsic;
 
+
+    // ------------------------------------------------------------
+    // Centres des deux caméras dans le repère monde
+    // 
+    // Pour une pose: X_camera = Rcw * X_world + tcw
+    // 
+    // Centre caméra dans le monde: Cw = -Rcw^T * tcw
+    // ------------------------------------------------------------
+    const cv::Mat keyframeCameraCenterWorld = 
+        -keyframeWorldToCameraRotation.t() * keyframeTranslationVector;
+
+    const cv::Mat currentCameraCenterWorld = 
+        -currentWorldToCameraRotation.t() * currentTranslationVector;
+
+
+    // ------------------------------------------------------------
+    // Angle minimal de triangulation
+    // 
+    // Si les 2 rayons de vue sont presque parallèles, la 
+    // profondeur du point devient très mal contrainte.
+    // 
+    // 1° est volontairement un seuil assez conservateur 
+    // pour commencer
+    // ------------------------------------------------------------
+    const double minimumTriangulationAngleDegrees = 0.25;
+
+
     // ------------------------------------------------------------
     // Triangulation
     // ------------------------------------------------------------
@@ -219,6 +246,9 @@ int addNewMapPointsBetweenKeyframes(
         CV_64F
     );
 
+
+    std::vector<double> triangulationAngles;
+
     // -----------------------------------------------------------
     // Validation et ajout à la carte
     // 
@@ -228,7 +258,9 @@ int addNewMapPointsBetweenKeyframes(
     //      - erreur de reprojection <= 2 px dans les deux vues.
     // -----------------------------------------------------------
     const double maximumReprojectionError = 2.0;
+
     int addedPoints = 0;
+    int rejectedByLowParallax = 0;
 
     for (int i = 0; i < homogeneousPoints4D64.cols; ++i) {
         const double w =
@@ -255,6 +287,13 @@ int addNewMapPointsBetweenKeyframes(
                 2, i
             ) / w;
 
+        if (!std::isfinite(pointX) ||
+            !std::isfinite(pointY) ||
+            !std::isfinite(pointZ))
+        {
+            continue;
+        }
+
         cv::Mat pointWorld = 
             (cv::Mat_<double>(3, 1)
                 << pointX,
@@ -273,6 +312,70 @@ int addNewMapPointsBetweenKeyframes(
         {
             continue;
         }
+        
+        // --------------------------------------------------------
+        // Contrôle de parallaxe
+        //
+        // On construit les deux rayons allant des centres caméra
+        // vers le point 3D.
+        //
+        //                 X
+        //                / \
+        //               /   \
+        //             C1     C2
+        //
+        // L'angle entre ces deux rayons doit être suffisamment
+        // grand pour que la profondeur soit bien contrainte.
+        // --------------------------------------------------------
+        cv::Mat rayFromKeyframe = 
+            pointWorld - keyframeCameraCenterWorld;
+
+        cv::Mat rayFromCurrent =
+            pointWorld - currentCameraCenterWorld;
+
+        const double keyframeRayNorm = 
+            cv::norm(rayFromKeyframe);
+
+        const double currentRayNorm =
+            cv::norm(rayFromCurrent);
+
+        // Protection contre les cas dégénérés
+        if (keyframeRayNorm < 1e-9 ||
+            currentRayNorm < 1e-9)
+        {
+            continue;
+        }
+
+        // Le cosinus d'un angle theta est donné par:
+        // cos(theta) = (a.b) / (||a||  ||b||)
+        double cosineAngle = 
+            rayFromKeyframe.dot(rayFromCurrent) / (keyframeRayNorm * currentRayNorm);
+
+        // Les petites erreurs numériques peuvent produire par exemple
+        // 1.0000000001, ce qui rendrait acos() invalide.
+        cosineAngle = 
+            std::clamp(
+                cosineAngle,
+                -1.0,
+                1.0
+            );
+
+        const double triangulationAngleDegrees =
+            std::acos(cosineAngle) * 180.0 / CV_PI;
+
+
+        triangulationAngles.push_back(
+            triangulationAngleDegrees
+        );
+
+        if (triangulationAngleDegrees < minimumTriangulationAngleDegrees)
+        {
+            ++rejectedByLowParallax;
+            continue;
+        }
+
+
+
 
 
         // -------------------------------------------------------
@@ -339,6 +442,72 @@ int addNewMapPointsBetweenKeyframes(
         currentMapPointIndices[match.trainIdx] = newMapPointIndex;
 
         ++addedPoints;
+    }
+
+    std::cout << "[TRIANGULATION] "
+              << "matches: "
+              << triangulationMatches.size()
+              << " | low-parallax rejected: "
+              << rejectedByLowParallax
+              << " | added: "
+              << addedPoints
+              << '\n';
+
+
+    if (!triangulationAngles.empty())
+    {
+        std::sort(
+            triangulationAngles.begin(),
+            triangulationAngles.end()
+        );
+
+        const double minimumAngle = 
+            triangulationAngles.front();
+
+        const double medianAngle = 
+            triangulationAngles[triangulationAngles.size() / 2];
+
+        const double maximumAngle =
+            triangulationAngles.back();
+
+        int above025 = 0;
+        int above050 = 0;
+        int above100 = 0;
+
+        for (double angle : triangulationAngles) 
+        {
+            if (angle >= 0.25)
+            {
+                ++above025;
+            }
+
+            if (angle >= 0.50)
+            {
+                ++above050;
+            }
+
+            if (angle >= 1.00)
+            {
+                ++above100;
+            }
+        }
+
+        std::cout << "[PARALLAX] min: "
+                  << minimumAngle
+                  << " deg"
+                  << " | median: "
+                  << medianAngle
+                  << " | max: "
+                  << maximumAngle
+                  << " deg\n";
+
+        std::cout << "[PARALLAX] >=0.25: "
+                  << above025
+                  << " | >=0.50: "
+                  << above050
+                  << " | >= 1.00: "
+                  << above100
+                  << '\n';
     }
 
     return addedPoints;
