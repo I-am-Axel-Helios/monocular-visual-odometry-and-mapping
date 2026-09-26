@@ -6,11 +6,345 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include <opencv2/opencv.hpp>
 
 
 namespace fs = std::filesystem;
+
+int addNewMapPointsBetweenKeyframes(
+    const std::vector<cv::KeyPoint>& keyframeKeypoints,
+    const cv::Mat& keyframeDescriptors,
+    std::vector<int>& keyframeMapPointIndices,
+    const cv::Mat& keyframeWorldToCameraRotation,
+    const cv::Mat& keyframeTranslationVector,
+
+    const std::vector<cv::KeyPoint>& currentKeypoints,
+    const cv::Mat& currentDescriptors,
+    std::vector<int>& currentMapPointIndices,
+    const cv::Mat& currentWorldToCameraRotation,
+    const cv::Mat& currentTranslationVector,
+
+    const cv::Mat& cameraMatrix,
+    const cv::Mat& distortionCoefficients,
+
+    float ratioThreshold,
+
+    std::vector<cv::Point3f>& mapPoints,
+    cv::Mat& mapDescriptors)
+{
+    // -----------------------------------------------------------
+    // Matching entre ancienne keyframe et nouvelle keyframe
+    // 
+    // On cherche ici des features qui ne correspondent PAS encore
+    // à des points 3D existants
+    // -----------------------------------------------------------
+    cv::BFMatcher matcher(
+        cv::NORM_HAMMING,
+        false
+    );
+
+    std::vector<std::vector<cv::DMatch>> knnMatches;
+
+    matcher.knnMatch(
+        keyframeDescriptors,
+        currentDescriptors,
+        knnMatches,
+        2
+    );
+
+    std::vector<cv::DMatch> candidateMatches;
+
+    for (const auto& candidates : knnMatches)
+    {
+        if (candidates.size() < 2)
+        {
+            continue;
+        }
+
+        const cv::DMatch& best = candidates[0];
+        const cv::DMatch& second = candidates[1];
+
+        // Lowe ratio test
+        if (best.distance >= ratioThreshold * second.distance)
+        {
+            continue;
+        }
+
+        // Le point de l'ancienne keyframe appartient déjà à la carte:
+        // inutile de le trianguler à nouveau
+        if (keyframeMapPointIndices[best.queryIdx] >= 0)
+        {
+            continue;
+        }
+
+        // Le point courant appartient déjà à la carte.
+        if (currentMapPointIndices[best.trainIdx] >= 0)
+        {
+            continue;
+        }
+
+        candidateMatches.push_back(
+            best
+        );
+    }
+    // On privilégie les meilleurs matches avantt de suppimer les
+    // duplications éventuelles sur l'image courante.
+    std::sort(
+        candidateMatches.begin(),
+        candidateMatches.end(),
+        [](const cv::DMatch& a,
+            const cv::DMatch& b)
+        {
+            return a.distance < b.distance;
+        }
+    );
+
+    std::vector<bool> currentKeypointAlreadyUsed(
+        currentKeypoints.size(),
+        false
+    );
+
+    std::vector<cv::DMatch> triangulationMatches;
+
+    for (const cv::DMatch& match : candidateMatches)
+    {
+        if (currentKeypointAlreadyUsed[match.trainIdx])
+        {
+            continue;
+        }
+
+        currentKeypointAlreadyUsed[match.trainIdx] = true;
+
+        triangulationMatches.push_back(match);
+    }
+
+    if (triangulationMatches.size() < 20)
+    {
+        return 0;    
+    }
+
+    // --------------------------------------------------------------
+    // Coordonnées 2D correspondant aux nouveaux matches
+    // --------------------------------------------------------------
+    std::vector<cv::Point2f> pointsKeyframe;
+    std::vector<cv::Point2f> pointsCurrent;
+
+    for (const cv::DMatch& match : triangulationMatches)
+    {
+        pointsKeyframe.push_back(
+            keyframeKeypoints[match.queryIdx].pt
+        );
+        pointsCurrent.push_back(
+            currentKeypoints[match.trainIdx].pt
+        );
+    }
+
+    // --------------------------------------------------------------
+    // Correction de la distorsion
+    // 
+    // P = cameraMatrix signifie que les coordonnées résultantes
+    // restent exprimées en pixels.
+    // --------------------------------------------------------------
+    std::vector<cv::Point2f> undistortedKeyframe;
+    std::vector<cv::Point2f> undistortedCurrent;
+
+    cv::undistortPoints(
+        pointsKeyframe,
+        undistortedKeyframe,
+        cameraMatrix,
+        distortionCoefficients,
+        cv::noArray(),
+        cameraMatrix
+    );
+
+    cv::undistortPoints(
+        pointsCurrent,
+        undistortedCurrent,
+        cameraMatrix,
+        distortionCoefficients,
+        cv::noArray(),
+        cameraMatrix
+    );
+
+    // ------------------------------------------------------------
+    // Matrices de projection ABSOLUES
+    // 
+    // Contrairement au bootstrap initial:
+    // 
+    // P1 = K [ R1 | t1 ]
+    // P2 = K [ R2 | t2 ]
+    // 
+    // Les points triangulés seront donc directement exprimés dans
+    // le repère monde de notre carte.
+    // ------------------------------------------------------------
+    cv::Mat keyframeExtrinsic;
+    cv::Mat currentExtrinsic;
+
+    cv::hconcat(
+        currentWorldToCameraRotation,
+        currentTranslationVector,
+        currentExtrinsic
+    );
+
+    cv::hconcat(
+        keyframeWorldToCameraRotation,
+        keyframeTranslationVector,
+        keyframeExtrinsic
+    );
+
+    const cv::Mat projectionKeyframe = 
+        cameraMatrix * keyframeExtrinsic;
+
+    const cv::Mat projectionCurrent =
+        cameraMatrix * currentExtrinsic;
+
+    // ------------------------------------------------------------
+    // Triangulation
+    // ------------------------------------------------------------
+    cv::Mat homogeneousPoints4D;
+
+    cv::triangulatePoints(
+        projectionKeyframe,
+        projectionCurrent,
+        undistortedKeyframe,
+        undistortedCurrent,
+        homogeneousPoints4D
+    );
+
+    cv::Mat homogeneousPoints4D64;
+    homogeneousPoints4D.convertTo(
+        homogeneousPoints4D64,
+        CV_64F
+    );
+
+    // -----------------------------------------------------------
+    // Validation et ajout à la carte
+    // 
+    // On impose :
+    //      - coordonnées finies;
+    //      - profondeur poisitive dans les deux caméras;
+    //      - erreur de reprojection <= 2 px dans les deux vues.
+    // -----------------------------------------------------------
+    const double maximumReprojectionError = 2.0;
+    int addedPoints = 0;
+
+    for (int i = 0; i < homogeneousPoints4D64.cols; ++i) {
+        const double w =
+            homogeneousPoints4D64.at<double>(
+                3,i
+            );
+
+        if (std::abs(w) < 1e-9) {
+            continue;
+        }
+
+        const double pointX = 
+            homogeneousPoints4D64.at<double>(
+                0, i
+            ) / w;
+
+        const double pointY =
+            homogeneousPoints4D64.at<double>(
+                1, i
+            ) / w;
+
+        const double pointZ =
+            homogeneousPoints4D64.at<double>(
+                2, i
+            ) / w;
+
+        cv::Mat pointWorld = 
+            (cv::Mat_<double>(3, 1)
+                << pointX,
+                   pointY,
+                   pointZ);
+
+        cv::Mat pointKeyframe = 
+            keyframeWorldToCameraRotation * pointWorld + keyframeTranslationVector;
+
+        cv::Mat pointCurrent =
+            currentWorldToCameraRotation * pointWorld + currentTranslationVector;
+
+        // Point derrière une caméra
+        if (pointKeyframe.at<double>(2, 0) <= 0.0 ||
+            pointCurrent.at<double>(2, 0) <= 0.0)
+        {
+            continue;
+        }
+
+
+        // -------------------------------------------------------
+        // Reprojection dans la keyframe
+        // -------------------------------------------------------
+        cv::Mat projectedKeyframe = cameraMatrix * pointKeyframe;
+
+        const cv::Point2d reprojectionKeyframe(
+            projectedKeyframe.at<double>(0, 0) / projectedKeyframe.at<double>(2, 0),
+            projectedKeyframe.at<double>(1, 0) / projectedKeyframe.at<double>(2, 0)
+        );
+
+        // -------------------------------------------------------
+        // Reprojection dans la frame courante
+        // -------------------------------------------------------
+        cv::Mat projectedCurrent = cameraMatrix * pointCurrent;
+
+        const cv::Point2d reprojectionCurrent(
+            projectedCurrent.at<double>(0, 0) / projectedCurrent.at<double>(2, 0),
+            projectedCurrent.at<double>(1, 0) / projectedCurrent.at<double>(2, 0)
+        );
+
+
+        const double errorKeyframe = 
+            cv::norm(
+                reprojectionKeyframe - cv::Point2d(undistortedKeyframe[i])
+            );
+
+        const double errorCurrent =
+            cv::norm(
+                reprojectionCurrent - cv::Point2d(undistortedCurrent[i])
+            );
+
+
+        if (errorKeyframe > maximumReprojectionError ||
+            errorCurrent > maximumReprojectionError)
+        {
+            continue;
+        }
+
+
+        // -------------------------------------------------------
+        // Nouveau point valide
+        // -------------------------------------------------------
+        const cv::DMatch& match = triangulationMatches[i];
+        const int newMapPointIndex = 
+            static_cast<int>(
+                mapPoints.size()
+            );
+
+        mapPoints.emplace_back(
+            static_cast<float>(pointX),
+            static_cast<float>(pointY),
+            static_cast<float>(pointZ)
+        );
+
+        // On conserve le descripteur de l'observation la plus récente.
+        mapDescriptors.push_back(
+            currentDescriptors.row(match.trainIdx)
+        );
+
+        // Association dans les deux keyframes
+        keyframeMapPointIndices[match.queryIdx] = newMapPointIndex;
+        currentMapPointIndices[match.trainIdx] = newMapPointIndex;
+
+        ++addedPoints;
+    }
+
+    return addedPoints;
+}
+
+
 
 int main(int argc, char* argv[])
 {
@@ -619,17 +953,68 @@ int main(int argc, char* argv[])
                           << keyframeFrameIndex
                           << '\n';
 
-                // Pour l'instant: on met seulement à jour la keyframe
+                // --------------------------------------------------------
+                // Extension de la carte
                 // 
-                // Dans l'étape suivante, AVANT catte mise à jour, 
-                // on triangulera les nouveaux points entre l'ancienne
-                // keyframe et celle-ci.
+                // IMPORTANT :
+                // ceci doit être fait AVANT de remplacer l'ancienne
+                // keyframe par la frame courante.
+                // --------------------------------------------------------
+                const std::size_t mapSizeBefore = mapPoints.size();
+
+                const int addedMapPoints = 
+                    addNewMapPointsBetweenKeyframes(
+                        keyframeKeypoints,
+                        keyframeDescriptors,
+                        keyframeMapPointIndices,
+                        keyframeWorldToCameraRotation,
+                        keyframeTranslationVector,
+
+                        currentKeypoints,
+                        currentDescriptors,
+                        currentMapPointIndices,
+                        worldToCameraRotation,
+                        translationVector,
+
+                        cameraMatrix,
+                        distortionCoefficients,
+
+                        ratioThreshold,
+
+                        mapPoints,
+                        mapDescriptors
+                    );
+                
+                std::cout << "[MAP] Added "
+                          << addedMapPoints
+                          << " new points"
+                          << " | size: "
+                          << mapSizeBefore
+                          << " -> "
+                          << mapPoints.size()
+                          << '\n';
+
+
+                // Verif permanente de notre invariant
+                if (mapPoints.size() !=
+                    static_cast<std::size_t>(
+                        mapDescriptors.rows
+                        ))
+                {
+                    std::cerr << "Error: mappoint/descriptor mismatch "
+                              << "after map extension.\n";
+
+                    return 1;
+                }
+
+                // La frame courante devient maintenant la nouvelle keyframe
                 keyframeFrameIndex = frameIndex;
                 keyframeKeypoints = currentKeypoints;
                 keyframeDescriptors = currentDescriptors.clone();
                 keyframeMapPointIndices = currentMapPointIndices;
                 keyframeWorldToCameraRotation = worldToCameraRotation.clone();
                 keyframeTranslationVector = translationVector.clone();
+
             }
 
             // Sauvegarde CSV
