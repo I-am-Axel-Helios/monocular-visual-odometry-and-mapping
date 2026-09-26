@@ -281,7 +281,42 @@ int main(int argc, char* argv[])
     cv::Mat mapDescriptors;
     bool mapInitialized = false;
 
+    // ------------------------------------------------------------
+    // Keyframe courante
+    // Une keyframe est une image de référence dont on conserve:
+    //      - les keypoints ORB;
+    //      - les descripteurs;
+    //      - les associations keypoint -> point 3D de la carte;
+    //      - sa pose absolue dans le repère monde.
+    // 
+    // keyframePointIndices[i] = -1
+    //      -> le keypoint i n'est associé à aucun point 3D.
+    // keyframePointIndices[i] >= 0
+    //      -> indice du point correspondant dans mapPoints.
+    // ------------------------------------------------------------
+    std::vector<cv::KeyPoint> keyframeKeypoints;
+    cv::Mat keyframeDescriptors;
+    std::vector<int> keyframeMapPointIndices;
 
+    // Pose monde -> caméra de la keyframe:
+    //      X_camera = Rcw * X_world + tcw
+    cv::Mat keyframeWorldToCameraRotation;
+    cv::Mat keyframeTranslationVector;
+
+    int keyframeFrameIndex = -1;
+
+
+    // ----------------------------------------------------------------
+    // Politique provisoire de création des keyframes.
+    // On envisage une nouvelle keyframe lorsque:
+    //      1. suffisamment de temps s'est écoulé depuis la précédente;
+    //      2. le nombre d'inliers PnP commence à diminuer.
+    // 
+    // 3 * frameStep = environ 1.5 seconde ici.
+    // ----------------------------------------------------------------
+    const int minimumKeyframeGapFrames = 3 * frameStep;
+    const int keyframeInlierThreshold = 120;
+    
     // ------------------------------------------------------------
     // Etat de la frame précédente acceptée
     // ------------------------------------------------------------
@@ -521,6 +556,33 @@ int main(int argc, char* argv[])
                 worldToCameraRotation
             );
 
+            // --------------------------------------------------------
+            // Association des keypoints de la frmae courante avec les 
+            // points 3D réellement validés par PnP/RANSAC.
+            // --------------------------------------------------------
+            std::vector<int> currentMapPointIndices(
+                currentKeypoints.size(), -1
+            );
+
+            for (int i = 0; i < pnpInliers.rows; ++i)
+            {
+                // solvePnPRansac retourne les indices dans pnpObjectPoints /
+                // pnpImagePoints.
+                // Ces deux vecteurs ont exactement le même ordre que
+                // mapGoodMatches.
+                const int matchListIndex =
+                    pnpInliers.at<int>(
+                        i, 0
+                    );
+
+                const cv::DMatch& inlierMatch =
+                    mapGoodMatches[matchListIndex];
+
+                // queryIdx = point de carte
+                // trainIdx = keypoint image courante
+                currentMapPointIndices[inlierMatch.trainIdx] = inlierMatch.queryIdx;
+            }
+
             cameraPositionWorld = -worldToCameraRotation.t() * translationVector;
 
             worldFromCameraRotation = worldToCameraRotation.t();
@@ -531,6 +593,44 @@ int main(int argc, char* argv[])
             const double y = cameraPositionWorld.at<double>(1, 0);
             const double z = cameraPositionWorld.at<double>(2, 0);
 
+            // -----------------------------------------------------------
+            // Décision de création d'une nouvelle keyframe
+            // -----------------------------------------------------------
+            const int framesSinceLastKeyframe = 
+                frameIndex - keyframeFrameIndex;
+
+            const bool enoughFrameSeparation = 
+                framesSinceLastKeyframe >= minimumKeyframeGapFrames;
+
+            const bool mapVisibilityIsDecreasing = 
+                pnpInliers.rows < keyframeInlierThreshold;
+
+            const bool shouldCreateKeyframe = 
+                enoughFrameSeparation && mapVisibilityIsDecreasing;
+
+            if (shouldCreateKeyframe)
+            {
+                std::cout << "[KEYFRAME] frame "
+                          << frameIndex
+                          << " selected"
+                          << " | PnP inliers: "
+                          << pnpInliers.rows
+                          << " | previous keyframe: "
+                          << keyframeFrameIndex
+                          << '\n';
+
+                // Pour l'instant: on met seulement à jour la keyframe
+                // 
+                // Dans l'étape suivante, AVANT catte mise à jour, 
+                // on triangulera les nouveaux points entre l'ancienne
+                // keyframe et celle-ci.
+                keyframeFrameIndex = frameIndex;
+                keyframeKeypoints = currentKeypoints;
+                keyframeDescriptors = currentDescriptors.clone();
+                keyframeMapPointIndices = currentMapPointIndices;
+                keyframeWorldToCameraRotation = worldToCameraRotation.clone();
+                keyframeTranslationVector = translationVector.clone();
+            }
 
             // Sauvegarde CSV
             trajectoryFile << frameIndex
@@ -839,6 +939,13 @@ int main(int argc, char* argv[])
             // Normalement inutile au premier passage, mais explicite
             mapPoints.clear();
             mapDescriptors.release();
+            
+            // Pour chaque keypoint de la deuxième image du bootstrap,
+            // mémorisation éventuelle du point 3D correspondant.
+            std::vector<int> bootstrapMapPointIndices(
+                currentKeypoints.size(),
+                -1
+            );
 
             // Conversion en points 3D euclidiens + cheirality
             for (int i = 0; i < homogeneousPoints4D64.cols; ++i)
@@ -889,22 +996,30 @@ int main(int argc, char* argv[])
                     continue;
                 }
 
-                // Le point est exprimé dans le repère de la première caméra,
-                // qui devient notre repère monde.
+                // Correspondance qui a produit ce point 3D
+                const cv::DMatch& match = bootstrapMatches[i];
+
+                // Indice que le nouveau point va recevoir dans mapPoints
+                const int newMapPointIndex = 
+                    static_cast<int>(
+                        mapPoints.size()
+                    );
+
                 mapPoints.emplace_back(
                     static_cast<float>(pointX),
                     static_cast<float>(pointY),
                     static_cast<float>(pointZ)
                 );
 
-                // Descripteur du même point observé dans la deuxième image
-                const cv::DMatch& match = bootstrapMatches[i];
-
                 mapDescriptors.push_back(
                     currentDescriptors.row(
                         match.trainIdx
                     )
                 );
+
+                // Le keypoint de la deuxième image sait maintenant 
+                // à quel point 3D il correspond.
+                bootstrapMapPointIndices[match.trainIdx] = newMapPointIndex;
             }
 
             // Vérification de l'invariant carte/descripteurs
@@ -933,6 +1048,25 @@ int main(int argc, char* argv[])
 
             mapInitialized = true;
             
+            // --------------------------------------------------------
+            // La deuxième image du bootstrap devient notre première
+            // keyframe.
+            // 
+            // Sa pose monde -> caméra est exactement la pose relative
+            // obtenue depuis la première caméra, puisque cette 
+            // dernière définit le repère monde.
+            // --------------------------------------------------------
+            keyframeFrameIndex = frameIndex;
+            keyframeKeypoints = currentKeypoints;
+            keyframeDescriptors = currentDescriptors.clone();
+            keyframeMapPointIndices = bootstrapMapPointIndices;
+            keyframeWorldToCameraRotation = relativeRotation.clone();
+            keyframeTranslationVector = relativeTranslation.clone();
+
+            std::cout << "\n[KEYFRAME] Initial keyframe: frame "
+                      << keyframeFrameIndex
+                      << '\n';
+
             std::cout << "\n=== Map initialization ===\n";
 
             std::cout << "Bootstrap frame: "
