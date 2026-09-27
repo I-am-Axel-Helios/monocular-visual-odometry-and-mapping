@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <limits>
 
 #include <opencv2/opencv.hpp>
 
@@ -220,9 +221,6 @@ int addNewMapPointsBetweenKeyframes(
     // 
     // Si les 2 rayons de vue sont presque parallèles, la 
     // profondeur du point devient très mal contrainte.
-    // 
-    // 1° est volontairement un seuil assez conservateur 
-    // pour commencer
     // ------------------------------------------------------------
     const double minimumTriangulationAngleDegrees = 0.25;
 
@@ -541,7 +539,7 @@ int main(int argc, char* argv[])
     //
     // Exemple :
     //
-    // video_visual_odometry
+    // map_visual_odometry
     //     sequence_main.mp4
     //     camera_calibration_video_1920x1080.yaml
     //     trajectory.csv
@@ -771,6 +769,23 @@ int main(int argc, char* argv[])
     const float ratioThreshold = 0.75f;
 
 
+    // -------------------------------------------------------------
+    // Critères minimaux pour accepter une pose PnP
+    // 
+    //  - au moins 20 correspondances 3D-2D avant PnP;
+    //  - au moins 20 inliers après RANSAC;
+    //  - au moins 40 % des correspondances doivent être des inliers.
+    // 
+    // Le ratio évite par exemple d'accepter une pose avec 20 inliers
+    // sur 200 correspondances.
+    // -------------------------------------------------------------
+    const int minimumPnPCorrespondences = 20;
+    const int minimumPnPInliers = 20;
+
+    const double minimumPnPInlierRatio = 0.40;
+
+
+
     // ------------------------------------------------------------
     // Carte 3D persistante
     // 
@@ -855,6 +870,38 @@ int main(int argc, char* argv[])
         );
 
 
+    // ------------------------------------------------------------
+    // Historique utilisé pour vérifier la cohérence du mouvement
+    // 
+    // lastAcceptedPoseFrameIndex : 
+    //      frame correspondant à cameraPositionWorld
+    // 
+    // recentNormalizedStepDistances :
+    //      derniers déplacements acceptés, ramenés à un intervalle 
+    //      normal de frameStep
+    // ------------------------------------------------------------
+    int lastAcceptedPoseFrameIndex = -1;
+
+    std::vector<double> recentNormalizedStepDistances;
+
+
+    // Nombre de déplacements récents utilisés pour estimer 
+    // le mouvement "normal"
+    const std::size_t motionHistorySize = 5;
+
+    // On autorise un deplacement jusqu'à 3 fois la médiane 
+    // récente avant de le considérer comme suspect.
+    const double maximumStepMedianMultiplier = 3.0;
+
+    // Sécurité pour éviter qu'une période quasi immobile
+    // rende le seuil exceesivement petit
+    // 
+    // ATTENTION: ce sont toujours des unités arbitraires
+    // monoculaires, pas des mètres
+    const double minimumMaximumNormalizedStep = 0.5;
+
+
+        
     // ------------------------------------------------------------
     // Lecture séquentielle de la vidéo
     // ------------------------------------------------------------
@@ -1005,7 +1052,7 @@ int main(int argc, char* argv[])
 
             // Cas où il y a pas assez de correspondances 3D-2D: 
             // impossible de localiser proprement la caméra.
-            if (pnpObjectPoints.size() < 20)
+            if (pnpObjectPoints.size() < minimumPnPCorrespondences)
             {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
@@ -1038,18 +1085,66 @@ int main(int argc, char* argv[])
                     cv::SOLVEPNP_ITERATIVE
                 );
 
-            if (!pnpSuccess ||
-                pnpInliers.rows < 20)
+
+            // ------------------------------------------------------
+            // Validation de la pose PnP
+            // ------------------------------------------------------
+
+            // 1ère condition : solvePnPRansac doit avoir réussi
+            if (!pnpSuccess)
+            {
+                std::cout << "[PNP SKIP] frame "
+                          << frameIndex
+                          << " : solvePnPRansac failed\n";
+
+                ++frameIndex;
+                continue;
+            }
+
+            // Proportion des correspondances 3D-2D qui ont réellement 
+            // été considérées comme cohérentes par RANSAC.
+            // Exemple: 80 matches, 60 inliers -> ratio = 60/80 = 0.75
+            const double pnpInlierRatio =
+                static_cast<double>(pnpInliers.rows) / static_cast<double>(pnpObjectPoints.size());
+
+            // 2ème condition : quantité absolue suffisante d'inliers
+            if (pnpInliers.rows < minimumPnPInliers)
             {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : "
                           << pnpInliers.rows
-                          << " PnP inliers\n";
+                          << " PnP inliers"
+                          << " | ratio: "
+                          << pnpInlierRatio
+                          << '\n';
 
                 ++frameIndex;
                 continue;
             }
+
+            // 3ème condition : proportion suffisante d'inliers.
+            // Une pose peut avoir 20 ou 30 inliers mais rester douteuse
+            // si elle avait plusieurs centaines de correspondances
+            // candidates au départ.
+            if (pnpInlierRatio < minimumPnPInlierRatio)
+            {
+                std::cout << "[PNP SKIP] frame "
+                          << frameIndex
+                          << " : low inlier ratio"
+                          << " | matches: "
+                          << pnpObjectPoints.size()
+                          << " | inliers: "
+                          << pnpInliers.rows
+                          << " | ratio: "
+                          << pnpInlierRatio
+                          << '\n';
+
+                ++frameIndex;
+                continue;
+            }
+
+
             
             // solvePnP donne: X_camera = Rcw * X_world + tcw
             // Position caméra dans le monde: Cw = -Rcw^T * tcw
@@ -1086,9 +1181,105 @@ int main(int argc, char* argv[])
                 currentMapPointIndices[inlierMatch.trainIdx] = inlierMatch.queryIdx;
             }
 
-            cameraPositionWorld = -worldToCameraRotation.t() * translationVector;
+            const cv::Mat candidateCameraPositionWorld = 
+                -worldToCameraRotation.t() * translationVector;
+
+            // -----------------------------------------------------------
+            // Cohérence temporelle de la nouvelle pose
+            // -----------------------------------------------------------
+            const int frameGap = 
+                frameIndex - lastAcceptedPoseFrameIndex;
+
+            // Distance 3D entre la dernière pose acceptée et la nouvelle
+            // pose proposée par PnP
+            const double rawStepDistance = 
+                cv::norm(
+                    candidateCameraPositionWorld - cameraPositionWorld
+                );
+
+            // Si une ou plusieurs frames ont été rejetées,
+            // rawStepDistance correspond à un temps plus long.
+            //
+            // On ramène donc toujours le déplacement à un intervalle
+            // standard de frameStep.
+            //
+            // Exemple :
+            //     frameStep = 15
+            //
+            // 15 frames écoulées : facteur 1
+            // 30 frames écoulées : facteur 0.5
+            // 45 frames écoulées : facteur 1/3
+            const double normalizedStepDistance = 
+                rawStepDistance * 
+                static_cast<double>(frameStep) /
+                static_cast<double>(frameGap);
+                
+
+            double recentMedianStep = 0.0;
+            double maximumAllowedStep =
+                std::numeric_limits<double>::infinity();
+
+            if (recentNormalizedStepDistances.size() >=
+                motionHistorySize) 
+            {
+                std::vector<double> sortedRecentSteps = 
+                    recentNormalizedStepDistances;
+
+                std::sort(
+                    sortedRecentSteps.begin(),
+                    sortedRecentSteps.end()
+                );
+
+                recentMedianStep =
+                    sortedRecentSteps[
+                        sortedRecentSteps.size() / 2
+                    ];
+
+                maximumAllowedStep =
+                    std::max(
+                        minimumMaximumNormalizedStep,
+                        maximumStepMedianMultiplier * recentMedianStep
+                    );
+            }
+
+            if (recentNormalizedStepDistances.size() >=
+                motionHistorySize &&
+                normalizedStepDistance >
+                maximumAllowedStep)
+            {
+                std::cout << "[PNP SKIP] frame "
+                          << frameIndex
+                          << " : motion jump"
+                          << " | step: "
+                          << normalizedStepDistance
+                          << " | recent median: "
+                          << recentMedianStep
+                          << " | allowed: "
+                          << maximumAllowedStep
+                          << '\n';
+
+                ++frameIndex;
+                continue;
+            }
+
+            cameraPositionWorld =
+                candidateCameraPositionWorld.clone();
 
             worldFromCameraRotation = worldToCameraRotation.t();
+
+            lastAcceptedPoseFrameIndex =
+                frameIndex;
+
+            recentNormalizedStepDistances.push_back(
+                normalizedStepDistance
+            );
+
+            if (recentNormalizedStepDistances.size() > motionHistorySize)
+            {
+                recentNormalizedStepDistances.erase(
+                    recentNormalizedStepDistances.begin()
+                );
+            }
 
             ++successfulPoseSteps;
 
@@ -1208,6 +1399,8 @@ int main(int argc, char* argv[])
                       << mapGoodMatches.size()
                       << " | PnP inliers: "
                       << pnpInliers.rows
+                      << " | ratio: "
+                      << pnpInlierRatio
                       << " | position: ["
                       << x
                       << ","
@@ -1664,6 +1857,9 @@ int main(int argc, char* argv[])
 
         worldFromCameraRotation =
             worldFromCameraRotation * relativeRotation.t();
+
+        lastAcceptedPoseFrameIndex =
+            frameIndex;
 
         ++successfulPoseSteps;
 
