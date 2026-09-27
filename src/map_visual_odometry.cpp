@@ -780,10 +780,14 @@ int main(int argc, char* argv[])
     // sur 200 correspondances.
     // -------------------------------------------------------------
     const int minimumPnPCorrespondences = 20;
-    const int minimumPnPInliers = 20;
+    //const int minimumPnPInliers = 20;
+    const int minimumPnPInliers = 15;
 
     const double minimumPnPInlierRatio = 0.40;
 
+    // Entre 15 & 19 inliers, on exigera une proportion nettement plus
+    // forte de correspondances cohérentes
+    const double minimumSparsePnPInlierRatio = 0.60;
 
 
     // ------------------------------------------------------------
@@ -1011,7 +1015,14 @@ int main(int argc, char* argv[])
             );
 
 
-            std::vector<cv::DMatch> mapGoodMatches;
+            // ---------------------------------------------------
+            // Matches ayant passé le test de Lowe
+            //
+            // Ils ne sont pas encore nécessairement univoques 
+            // côté image courante : plusieurs points 3D peuvent
+            // avoir choisi le même keypoint 2D
+            // ---------------------------------------------------
+            std::vector<cv::DMatch> mapCandidateMatches;
             
             for (const auto& candidates : mapKnnMatches)
             {
@@ -1022,9 +1033,57 @@ int main(int argc, char* argv[])
 
                 if (candidates[0].distance < ratioThreshold * candidates[1].distance)
                 {
-                    mapGoodMatches.push_back(candidates[0]);
+                    mapCandidateMatches.push_back(candidates[0]);
                 }
             }
+
+            std::sort(
+                mapCandidateMatches.begin(),
+                mapCandidateMatches.end(),
+                [](const cv::DMatch& a,
+                    const cv::DMatch& b)
+                {
+                    return a.distance < b.distance;
+                }
+            );
+
+            std::vector<bool> currentKeypointAlreadyUsed(
+                currentKeypoints.size(), false
+            );
+
+            std::vector<cv::DMatch> mapGoodMatches;
+
+            mapGoodMatches.reserve(
+                mapCandidateMatches.size()
+            );
+
+            for (const cv::DMatch& match : mapCandidateMatches)
+            {
+                // trainIdx correspond au keypoint de la frame courante
+                if (currentKeypointAlreadyUsed[match.trainIdx])
+                {
+                    continue;
+                }
+
+                currentKeypointAlreadyUsed[match.trainIdx] = true;
+
+                mapGoodMatches.push_back(
+                    match
+                );
+            }
+
+            const std::size_t removedDuplicateImageMatches =
+                mapCandidateMatches.size() - mapGoodMatches.size();
+
+            std::cout << "[MAP MATCHING] frame "
+                      << frameIndex
+                      << " | Lowe matches: "
+                      << mapCandidateMatches.size()
+                      << " | unique 2D matches: "
+                      << mapGoodMatches.size()
+                      << " | duplicates removed: "
+                      << removedDuplicateImageMatches
+                      << '\n';
 
             // Construction des correspondances:
             // point 3D de la carte <-> point 2D de l'image
@@ -1108,6 +1167,10 @@ int main(int argc, char* argv[])
                 static_cast<double>(pnpInliers.rows) / static_cast<double>(pnpObjectPoints.size());
 
             // 2ème condition : quantité absolue suffisante d'inliers
+
+            // Avec les correspondances 2D désormais univoques, 15 à 19 
+            // inliers peuvent être suffisants si leur ratio est 
+            // particulièrement bon
             if (pnpInliers.rows < minimumPnPInliers)
             {
                 std::cout << "[PNP SKIP] frame "
@@ -1115,6 +1178,24 @@ int main(int argc, char* argv[])
                           << " : "
                           << pnpInliers.rows
                           << " PnP inliers"
+                          << " | ratio: "
+                          << pnpInlierRatio
+                          << '\n';
+
+                ++frameIndex;
+                continue;
+            }
+
+            // Cas "sparse but clean": 
+            // entre 15 & 19 inliers, on demande au moins 60%
+            if (pnpInliers.rows < 20 &&
+                pnpInlierRatio < minimumSparsePnPInlierRatio)
+            {
+                std::cout << "[PNP SKIP] frame "
+                          << frameIndex
+                          << " : sparse PnP"
+                          << " | inliers: "
+                          << pnpInliers.rows
                           << " | ratio: "
                           << pnpInlierRatio
                           << '\n';
