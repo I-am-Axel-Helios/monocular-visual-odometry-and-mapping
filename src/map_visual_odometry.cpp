@@ -14,6 +14,33 @@
 
 namespace fs = std::filesystem;
 
+// ----------------------------------------------------------------
+// Informations de qualité associées à un point 3D de la carte.
+// 
+// Cette structure reste parallèle à mapPoints:
+//      mapPoints[i], mapDescriptors.row(i) et mapPointQualities[i]
+//      représentent toujours le même point physique.
+// ----------------------------------------------------------------
+struct MapPointQuality
+{
+    // Frame à laquelle le point 3D a été triangulé
+    int creationFrameIndex = -1;
+
+    // Dernière frame dans laquelle ce point a été validé
+    // comme inlier PnP
+    // À sa création, on considère qu'il vient d'être vu.
+    int lastSeenFrameIndex = -1;
+
+    // Nombre de fois où le descripteur de ce point a produit une correspondance
+    // 3D-2D candidate pour PnP
+    int pnpMatchCount = 0;
+
+    // Nombre de fois où cette correspondance a réellement survécu au RANSAC PnP
+    int pnpInlierCount = 0;
+};
+
+
+
 int addNewMapPointsBetweenKeyframes(
     const std::vector<cv::KeyPoint>& keyframeKeypoints,
     const cv::Mat& keyframeDescriptors,
@@ -801,6 +828,9 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------
     std::vector<cv::Point3f> mapPoints;
     cv::Mat mapDescriptors;
+
+    std::vector<MapPointQuality> mapPointQualities;
+
     bool mapInitialized = false;
 
     // ------------------------------------------------------------
@@ -1266,7 +1296,7 @@ int main(int argc, char* argv[])
             );
 
             // --------------------------------------------------------
-            // Association des keypoints de la frmae courante avec les 
+            // Association des keypoints de la frame courante avec les 
             // points 3D réellement validés par PnP/RANSAC.
             // --------------------------------------------------------
             std::vector<int> currentMapPointIndices(
@@ -1380,6 +1410,32 @@ int main(int argc, char* argv[])
 
             lastAcceptedPoseFrameIndex =
                 frameIndex;
+            
+            // Tous les matches envoyés à PnP comptent comme tentative
+            // d'observation du point 3D
+            for (const cv::DMatch& match : mapGoodMatches)
+            {
+                const int mapPointIndex = match.queryIdx;
+
+                ++mapPointQualities[mapPointIndex].pnpMatchCount;
+            }
+
+            // Les inliers PnP sont des observations confirmées
+            for (int i = 0; i < pnpInliers.rows; ++i)
+            {
+                const int matchListIndex = 
+                    pnpInliers.at<int>(i, 0);
+
+                const int mapPointIndex = 
+                    mapGoodMatches[matchListIndex].queryIdx;
+
+                MapPointQuality& quality = 
+                    mapPointQualities[mapPointIndex];
+
+                ++quality.pnpInlierCount;
+
+                quality.lastSeenFrameIndex = frameIndex;
+            }
 
             recentNormalizedStepDistances.push_back(
                 normalizedStepDistance
@@ -1419,7 +1475,7 @@ int main(int argc, char* argv[])
 
             // Peu de correspondances carte -> image
             const bool lowMapVisibility =
-                mapGoodMatches.size() < keyframeInlierThreshold;
+                mapGoodMatches.size() < keyframeMatchThreshold;
 
             // Peu d'inliers géométriquement cohérents
             const bool lowAbsolutePnPSupport =
@@ -1513,19 +1569,135 @@ int main(int argc, char* argv[])
                           << " -> "
                           << mapPoints.size()
                           << '\n';
+                
+                // -------------------------------------------------------
+                // Création des infos de qualité pour les nouveaux points
+                // 3D ajoutés pendant cette extension de carte.
+                // 
+                // Avant addNewMapPointsBetweenKeyframes():
+                //      mapSizeBefore = ancien nombre de points.
+                // 
+                // Après:
+                //      les indices [mapSizeBefore, mapPoints.size()]
+                //      correspondent exactement aux nouveaux points.
+                // -----------------------------------------------------
+                for (std::size_t mapPointIndex = mapSizeBefore;
+                    mapPointIndex < mapPoints.size();
+                    ++mapPointIndex)
+                {
+                    MapPointQuality quality;
 
+                    quality.creationFrameIndex = frameIndex;
+                    quality.lastSeenFrameIndex = frameIndex;
+
+                    mapPointQualities.push_back(
+                        quality
+                    );
+                }
 
                 // Verif permanente de notre invariant
-                if (mapPoints.size() !=
-                    static_cast<std::size_t>(
-                        mapDescriptors.rows
-                        ))
+                if (mapPoints.size() != 
+                        static_cast<std::size_t>(mapDescriptors.rows) || 
+                    mapPoints.size() != 
+                        mapPointQualities.size()
+                   )
                 {
-                    std::cerr << "Error: map point/descriptor mismatch "
-                              << "after map extension.\n";
+                    std::cerr << "Error: map data size mismatch"
+                              << " | points: "
+                              << mapPoints.size()
+                              << " | descriptors: "
+                              << mapDescriptors.rows
+                              << " | qualities: "
+                              << mapPointQualities.size()
+                              << '\n';
 
                     return 1;
                 }
+
+                // -----------------------------------------------------------
+                // Diagnostic de qualité de la carte
+                // Aucun point n'est supprimé pour l'instant
+                // -----------------------------------------------------------
+                int neverConfirmedByPnP = 0;
+                int confirmedAtLeastOnce = 0;
+                int confirmedAtLeastThreeTimes = 0;
+                int staleMapPoints = 0;
+
+                int oldNeverConfirmed = 0;
+                int lowPnPConfirmationRatio = 0;
+
+                const int stalePointAgeFrames =
+                    12 * frameStep;                               // environ 6 secondes
+
+                for (const MapPointQuality& quality : mapPointQualities)
+                {
+                    if (quality.pnpInlierCount == 0)
+                    {
+                        ++neverConfirmedByPnP;
+                    }
+
+                    if (quality.pnpInlierCount >= 1)
+                    {
+                        ++confirmedAtLeastOnce;
+                    }
+
+                    if (quality.pnpInlierCount >= 3)
+                    {
+                        ++confirmedAtLeastThreeTimes;
+                    }
+
+                    const int framesSinceLastSeen =
+                        frameIndex - quality.lastSeenFrameIndex;
+
+                    if (framesSinceLastSeen >= stalePointAgeFrames)
+                    {
+                        ++staleMapPoints;
+                    }
+
+                    const int pointAgeFrames =
+                        frameIndex - quality.creationFrameIndex;
+
+                    // Point suffisamment ancien pour avoir eu plusieurs occasions
+                    // d'être réobservé, mais jamais validé par PnP.
+                    if (pointAgeFrames >= 12 * frameStep &&
+                        quality.pnpInlierCount == 0)
+                    {
+                        ++oldNeverConfirmed;
+                    }
+
+                    // Point qui a souvent produit un match, mais qui est rarement
+                    // accepté comme inlier PnP.
+                    // On exige au moins 5 tentatives pour ne pas tirer de 
+                    // conclusion à partir de trop peu d'observations.
+                    if (quality.pnpMatchCount >= 5)
+                    {
+                        const double confirmationRatio = 
+                            static_cast<double>(quality.pnpInlierCount) /
+                            static_cast<double>(quality.pnpMatchCount);
+
+                        if (confiramtionRatio < 0.25)
+                        {
+                            ++lowPnPConfirmationRatio;
+                        }
+                    }
+                }
+
+                std::cout << "[MAP QUALITY]"
+                          << " size: "
+                          << mapPoints.size()
+                          << " | never PnP-confirmed: "
+                          << neverConfirmedByPnP
+                          << " | confirmed >= 1: "
+                          << confirmedAtLeastOnce
+                          << " | confirmed >= 3: "
+                          << confirmedAtLeastThreeTimes
+                          << " | stale: "
+                          << staleMapPoints
+                          << " | old never-confirmed: "
+                          << oldNeverConfirmed
+                          << " | low confirmation ratio: "
+                          << lowPnPConfiramtionRatio
+                          << '\n';
 
                 // La frame courante devient maintenant la nouvelle keyframe
                 lastSelectedKeyframeFrameIndex = frameIndex;
@@ -2001,6 +2173,32 @@ int main(int argc, char* argv[])
                 continue;
             }
 
+            // -----------------------------------------------------------
+            // Initialisation des informations de qualité des points créés
+            // pendant le bootstrap
+            // 
+            // On ne compte pas encore leurs deux observations de 
+            // triangulation comme observations PnP.
+            // 
+            // pnpMatchCount / pnpInlierCount commencent donc à 0.
+            // -----------------------------------------------------------
+            mapPointQualities.clear();
+
+            mapPointQualities.resize(
+                mapPoints.size()
+            );
+
+            for (MapPointQuality& quality : mapPointQualities)
+            {
+                quality.creationFrameIndex = frameIndex;
+                quality.lastSeenFrameIndex = frameIndex;
+            }
+
+            if (mapPointQualities.size() != mapPoints.size())
+            {
+                std::cerr << "Error: map point/quality mismatch after bootstrap.\n";
+                return 1;
+            }
 
             mapInitialized = true;
             
