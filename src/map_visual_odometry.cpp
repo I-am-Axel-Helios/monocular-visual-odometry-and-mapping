@@ -826,6 +826,28 @@ int main(int argc, char* argv[])
     cv::Mat keyframeTranslationVector;
 
     int keyframeFrameIndex = -1;
+    
+    // Dernière frame ayant déclenché la politique de sélection
+    // de keyframe.
+    // 
+    // Elle est distincte de keyframeFrameIndex :
+    // keyframeframeIndex désigne désormais l'ancre réellement 
+    // utilisée pour la triangulation de nouveaux points 3D.
+    int lastSelectedKeyframeFrameIndex = -1;
+
+    // Une keyframe candidate ne devient nouvelle ancre de 
+    // triangulation que si elle a permis d'enrichir suffisamment
+    // la carte.
+
+    // Une extension d'au moins 10 points est suffisamment utile pour
+    // justifier une nouvelle ancre.
+    const int minimumNewMapPointsForAnchorPromotion = 10;
+
+    // Même si peu de nouveaux points ont été créés, on ne laisse pas
+    // l'ancre devenir trop trop ancienne.
+    // 
+    // 4 * frameStep = environ 2 secondes
+    const int maximumMappingAnchorGapFrames = 4 * frameStep;
 
 
     // ----------------------------------------------------------------
@@ -1380,7 +1402,7 @@ int main(int argc, char* argv[])
             // Décision adaptative de création d'une nouvelle keyframe
             // -----------------------------------------------------------
             const int framesSinceLastKeyframe = 
-                frameIndex - keyframeFrameIndex;
+                frameIndex - lastSelectedKeyframeFrameIndex;
 
             // Trop proche de la dernière keyframe:
             // on préfère attendre davantage de baseline
@@ -1443,7 +1465,11 @@ int main(int argc, char* argv[])
                           << mapGoodMatches.size()
                           << " | PnP inliers: "
                           << pnpInliers.rows
-                          << " | previous keyframe: "
+                          << " | ratio: "
+                          << pnpInlierRatio
+                          << " | previous selected: "
+                          << lastSelectedKeyframeFrameIndex
+                          << " | mapping anchor: "
                           << keyframeFrameIndex
                           << '\n';
 
@@ -1495,20 +1521,69 @@ int main(int argc, char* argv[])
                         mapDescriptors.rows
                         ))
                 {
-                    std::cerr << "Error: mappoint/descriptor mismatch "
+                    std::cerr << "Error: map point/descriptor mismatch "
                               << "after map extension.\n";
 
                     return 1;
                 }
 
                 // La frame courante devient maintenant la nouvelle keyframe
-                keyframeFrameIndex = frameIndex;
-                keyframeKeypoints = currentKeypoints;
-                keyframeDescriptors = currentDescriptors.clone();
-                keyframeMapPointIndices = currentMapPointIndices;
-                keyframeWorldToCameraRotation = worldToCameraRotation.clone();
-                keyframeTranslationVector = translationVector.clone();
+                lastSelectedKeyframeFrameIndex = frameIndex;
 
+
+                const int framesSinceMappingAnchor = 
+                    frameIndex - keyframeFrameIndex;
+
+                const bool enoughNewMapPoints = 
+                    addedMapPoints >= minimumNewMapPointsForAnchorPromotion;
+
+                const bool mappingAnchorTooOld = 
+                    framesSinceMappingAnchor >= maximumMappingAnchorGapFrames;
+
+
+                // -----------------------------------------------------------
+                // Promotion éventuelle de la frame courante comme nouvelle
+                // ancre de triangulation.
+                // 
+                // La sélection de la keyframe et le changement d'ancre sont
+                // désormais deux décisions différentes.
+                // -----------------------------------------------------------
+                if (enoughNewMapPoints || mappingAnchorTooOld)
+                {
+                    keyframeFrameIndex = frameIndex;
+
+                    keyframeKeypoints = currentKeypoints;
+                    keyframeDescriptors = currentDescriptors.clone();
+
+                    keyframeMapPointIndices = currentMapPointIndices;
+
+                    keyframeWorldToCameraRotation = worldToCameraRotation.clone();
+                    keyframeTranslationVector = translationVector.clone();
+
+                    std::cout << "[MAP ANCHOR] promoted frame: "
+                              << frameIndex
+                              << " | reason: "
+                              << (
+                                    enoughNewMapPoints ? "map growth" : "anchor age"
+                                  )
+                              << " | added points: "
+                              << addedMapPoints
+                              << " | previous anchor age: "
+                              << framesSinceMappingAnchor
+                              << " frames\n";
+                }
+                else
+                {
+                    std::cout << "[MAP ANCHOR] kept frame: "
+                              << keyframeFrameIndex
+                              << " | candidate frame: "
+                              << frameIndex
+                              << " | added only: "
+                              << addedMapPoints
+                              << " | anchor age: "
+                              << framesSinceMappingAnchor
+                              << " frames\n";
+                }
             }
 
             // Sauvegarde CSV
@@ -1943,6 +2018,8 @@ int main(int argc, char* argv[])
             keyframeMapPointIndices = bootstrapMapPointIndices;
             keyframeWorldToCameraRotation = relativeRotation.clone();
             keyframeTranslationVector = relativeTranslation.clone();
+
+            lastSelectedKeyframeFrameIndex = frameIndex;
 
             std::cout << "\n[KEYFRAME] Initial keyframe: frame "
                       << keyframeFrameIndex
