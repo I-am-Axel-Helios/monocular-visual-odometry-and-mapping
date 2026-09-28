@@ -829,15 +829,23 @@ int main(int argc, char* argv[])
 
 
     // ----------------------------------------------------------------
-    // Politique provisoire de création des keyframes.
-    // On envisage une nouvelle keyframe lorsque:
-    //      1. suffisamment de temps s'est écoulé depuis la précédente;
-    //      2. le nombre d'inliers PnP commence à diminuer.
+    // Politique adaptative de création des keyframes.
+    // Minimum: 
+    // On évite 2 keyframes trop proches, ce qui donnerait 
+    // peu de parallaxe.
     // 
-    // 3 * frameStep = environ 1.5 seconde ici.
+    // Maximum:
+    // même si le tracking reste bon, on renouvelle périodiquement
+    // la référence.
     // ----------------------------------------------------------------
-    const int minimumKeyframeGapFrames = 3 * frameStep;
-    const int keyframeInlierThreshold = 120;
+    const int minimumKeyframeGapFrames = 2 * frameStep;  // environ 1 seconde
+    const int maximumKeyframeGapFrames = 6 * frameStep;  // environ 3 seconde
+
+    // Tracking considéré comme affaibli si l'un de ces critères devient mauvais
+    const int keyframeInlierThreshold = 50;
+    const double keyframeInlierRatioThreshold = 0.60;
+
+    const std::size_t keyframeMatchThreshold = 60;
     
     // ------------------------------------------------------------
     // Etat de la frame précédente acceptée
@@ -1369,25 +1377,70 @@ int main(int argc, char* argv[])
             const double z = cameraPositionWorld.at<double>(2, 0);
 
             // -----------------------------------------------------------
-            // Décision de création d'une nouvelle keyframe
+            // Décision adaptative de création d'une nouvelle keyframe
             // -----------------------------------------------------------
             const int framesSinceLastKeyframe = 
                 frameIndex - keyframeFrameIndex;
 
+            // Trop proche de la dernière keyframe:
+            // on préfère attendre davantage de baseline
             const bool enoughFrameSeparation = 
                 framesSinceLastKeyframe >= minimumKeyframeGapFrames;
 
-            const bool mapVisibilityIsDecreasing = 
+            // Même avec un bon tracking, on ne conserve pas une keyframe indéfiniment
+            const bool maximumGapReached = 
+                framesSinceLastKeyframe >= maximumKeyframeGapFrames;
+
+            // ---------------------------------------------------------
+            // Qualité actuelle du tracking
+            // ---------------------------------------------------------
+
+            // Peu de correspondances carte -> image
+            const bool lowMapVisibility =
+                mapGoodMatches.size() < keyframeInlierThreshold;
+
+            // Peu d'inliers géométriquement cohérents
+            const bool lowAbsolutePnPSupport =
                 pnpInliers.rows < keyframeInlierThreshold;
 
+            // Une proportion importante des matches est rejetée par RANSAC
+            const bool lowPnPInlierRatio =
+                pnpInlierRatio < keyframeInlierRatioThreshold;
+
+            const bool trackingIsWeakening =
+                lowMapVisibility ||
+                lowAbsolutePnPSupport ||
+                lowPnPInlierRatio;
+
+            // -------------------------------------------------------
+            // Création de la keyframe
+            // Possibilités:
+            //      1. le tracking commence à faiblir ET suffisamment
+            //          de temps s'est écoulé;
+            //      2. le délai maximal est atteint, même si le 
+            //          tracking reste encore bon. 
+            // -------------------------------------------------------
             const bool shouldCreateKeyframe = 
-                enoughFrameSeparation && mapVisibilityIsDecreasing;
+                maximumGapReached || 
+                (
+                    enoughFrameSeparation && 
+                    trackingIsWeakening
+                );
 
             if (shouldCreateKeyframe)
             {
                 std::cout << "[KEYFRAME] frame "
                           << frameIndex
                           << " selected"
+                          << " | reason: "
+                          << (
+                                maximumGapReached ? "maximum gap" : "tracking weakening"
+                              )
+                          << " | gap: "
+                          << framesSinceLastKeyframe
+                          << " frames"
+                          << " | matches: "
+                          << mapGoodMatches.size()
                           << " | PnP inliers: "
                           << pnpInliers.rows
                           << " | previous keyframe: "
