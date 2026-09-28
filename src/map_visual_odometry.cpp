@@ -1675,7 +1675,7 @@ int main(int argc, char* argv[])
                             static_cast<double>(quality.pnpInlierCount) /
                             static_cast<double>(quality.pnpMatchCount);
 
-                        if (confiramtionRatio < 0.25)
+                        if (confirmationRatio < 0.25)
                         {
                             ++lowPnPConfirmationRatio;
                         }
@@ -1696,7 +1696,7 @@ int main(int argc, char* argv[])
                           << " | old never-confirmed: "
                           << oldNeverConfirmed
                           << " | low confirmation ratio: "
-                          << lowPnPConfiramtionRatio
+                          << lowPnPConfirmationRatio
                           << '\n';
 
                 // La frame courante devient maintenant la nouvelle keyframe
