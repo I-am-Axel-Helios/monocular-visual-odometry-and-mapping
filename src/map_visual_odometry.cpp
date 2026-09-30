@@ -8,6 +8,7 @@
 #include <vector>
 #include <algorithm>
 #include <limits>
+#include <cstdint>
 
 #include <opencv2/opencv.hpp>
 
@@ -45,6 +46,8 @@ struct MapPointQuality
     int lastMatchedFrameIndex = -1;
 };
 
+using MapPointId = std::uint64_t;
+
 
 int cullOldNeverConfirmedMapPoints(
     int currentFrameIndex,
@@ -54,6 +57,7 @@ int cullOldNeverConfirmedMapPoints(
     std::vector<cv::Point3f>& mapPoints,
     cv::Mat& mapDescriptors,
     std::vector<MapPointQuality>& mapPointQualities,
+    std::vector<MapPointId>& mapPointIds,
 
     std::vector<int>& keyframeMapPointIndices,
     std::vector<int>& currentMapPointIndices)
@@ -63,9 +67,11 @@ int cullOldNeverConfirmedMapPoints(
     // prafaitement synchronisées avant toute suppression.
     // ----------------------------------------------------
     if (mapPoints.size() !=
-        static_cast<std::size_t>(mapDescriptors.rows) ||
+            static_cast<std::size_t>(mapDescriptors.rows) ||
         mapPoints.size() !=
-        mapPointQualities.size()
+            mapPointQualities.size() ||
+        mapPoints.size() !=
+            mapPointIds.size()
         )
     {
         std::cerr << "Error: inconsistant map before culling.\n";
@@ -85,9 +91,11 @@ int cullOldNeverConfirmedMapPoints(
     std::vector<cv::Point3f> newMapPoints;
     std::vector<MapPointQuality> newMapPointQualities;
     cv::Mat newMapDescriptors;
+    std::vector<MapPointId> newMapPointIds;
 
     newMapPoints.reserve(oldMapSize);
     newMapPointQualities.reserve(oldMapSize);
+    newMapPointIds.reserve(oldMapSize);
 
     int removedPoints = 0;
     int protectedByRecentMatch = 0;
@@ -144,6 +152,10 @@ int cullOldNeverConfirmedMapPoints(
                 static_cast<int>(oldIndex)
             )
         );
+
+        newMapPointIds.push_back(
+            mapPointIds[oldIndex]
+        );
     }
 
     // -------------------------------------------------------------
@@ -175,6 +187,11 @@ int cullOldNeverConfirmedMapPoints(
         keyframeMapPointIndices
     );
 
+    remapAssociations(
+        currentMapPointIndices
+    );
+
+
     // Installation de la carte compactée
     mapPoints.swap(
         newMapPoints
@@ -182,6 +199,10 @@ int cullOldNeverConfirmedMapPoints(
 
     mapPointQualities.swap(
         newMapPointQualities
+    );
+
+    mapPointIds.swap(
+        newMapPointIds
     );
 
     mapDescriptors = newMapDescriptors;
@@ -991,7 +1012,17 @@ int main(int argc, char* argv[])
 
     std::vector<MapPointQuality> mapPointQualities;
 
+
+    // Identifiant stable de chaque point 3D.
+    // Contrairement à l'indice dans mapPoints, cet ID ne chnge
+    // jamais lors d'un culling.
+    std::vector<MapPointId> mapPointIds;
+
+    MapPointId nextMapPointId = 0;
+
     bool mapInitialized = false;
+
+
 
     // ------------------------------------------------------------
     // Keyframe courante
@@ -1780,13 +1811,19 @@ int main(int argc, char* argv[])
                     mapPointQualities.push_back(
                         quality
                     );
+
+                    mapPointIds.push_back(
+                        nextMapPointId++
+                    );
                 }
 
                 // Verif permanente de notre invariant
                 if (mapPoints.size() != 
                         static_cast<std::size_t>(mapDescriptors.rows) || 
                     mapPoints.size() != 
-                        mapPointQualities.size()
+                        mapPointQualities.size() ||
+                    mapPoints.size() != 
+                        mapPointIds.size()
                    )
                 {
                     std::cerr << "Error: map data size mismatch"
@@ -1796,6 +1833,8 @@ int main(int argc, char* argv[])
                               << mapDescriptors.rows
                               << " | qualities: "
                               << mapPointQualities.size()
+                              << " | IDs: "
+                              << mapPointIds.size()
                               << '\n';
 
                     return 1;
@@ -1902,6 +1941,7 @@ int main(int argc, char* argv[])
                         mapPoints,
                         mapDescriptors,
                         mapPointQualities,
+                        mapPointIds,
 
                         keyframeMapPointIndices,
                         currentMapPointIndices
@@ -2424,9 +2464,31 @@ int main(int argc, char* argv[])
                 quality.lastMatchedFrameIndex = frameIndex;
             }
 
-            if (mapPointQualities.size() != mapPoints.size())
+            mapPointIds.clear();
+
+            mapPointIds.reserve(
+                mapPoints.size()
+            );
+
+            for (std::size_t i = 0; i < mapPoints.size(); ++i)
             {
-                std::cerr << "Error: map point/quality mismatch after bootstrap.\n";
+                mapPointIds.push_back(
+                    nextMapPointId++
+                );
+            }
+
+
+            if (mapPointQualities.size() != mapPoints.size() ||
+                mapPointIds.size() != mapPoints.size())
+            {
+                std::cerr << "Error: map data mismatch after bootstrap"
+                          << " | points: "
+                          << mapPoints.size()
+                          << " | qualities: "
+                          << mapPointQualities.size()
+                          << " | IDs: "
+                          << mapPointIds.size()
+                          << "\n";
                 return 1;
             }
 
