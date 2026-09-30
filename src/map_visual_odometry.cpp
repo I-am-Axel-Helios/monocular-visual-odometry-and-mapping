@@ -37,8 +37,168 @@ struct MapPointQuality
 
     // Nombre de fois où cette correspondance a réellement survécu au RANSAC PnP
     int pnpInlierCount = 0;
+
+    // Dernière frame dans laquelle le descripteur du point
+    // a produit une correspondance 3D-2D après Lowe + déduplication 2D.
+    // 
+    // ATTENTION: cela ne signifie PAS que le point était un inlier PnP.
+    int lastMatchedFrameIndex = -1;
 };
 
+
+int cullOldNeverConfirmedMapPoints(
+    int currentFrameIndex,
+    int minimumPointAgeFrames,
+    int maximumUnmatchedAgeFrames,
+
+    std::vector<cv::Point3f>& mapPoints,
+    cv::Mat& mapDescriptors,
+    std::vector<MapPointQuality>& mapPointQualities,
+
+    std::vector<int>& keyframeMapPointIndices,
+    std::vector<int>& currentMapPointIndices)
+{
+    // ----------------------------------------------------
+    // Sécurité: les 3 structures de carte doivent être 
+    // prafaitement synchronisées avant toute suppression.
+    // ----------------------------------------------------
+    if (mapPoints.size() !=
+        static_cast<std::size_t>(mapDescriptors.rows) ||
+        mapPoints.size() !=
+        mapPointQualities.size()
+        )
+    {
+        std::cerr << "Error: inconsistant map before culling.\n";
+        return -1;
+    }
+
+
+    const std::size_t oldMapSize = mapPoints.size();
+
+    // oldToNew[i] = 
+    //      nouvel indice du point i s'il est conservé,
+    //      -1 s'il est supprimé
+    std::vector<int> oldToNew(
+        oldMapSize, -1
+    );
+
+    std::vector<cv::Point3f> newMapPoints;
+    std::vector<MapPointQuality> newMapPointQualities;
+    cv::Mat newMapDescriptors;
+
+    newMapPoints.reserve(oldMapSize);
+    newMapPointQualities.reserve(oldMapSize);
+
+    int removedPoints = 0;
+    int protectedByRecentMatch = 0;
+
+    for (std::size_t oldIndex = 0; oldIndex < oldMapSize; ++oldIndex)
+    {
+        const MapPointQuality& quality = mapPointQualities[oldIndex];
+
+        const int pointAgeFrames = currentFrameIndex - quality.creationFrameIndex;
+
+        const bool oldEnough =
+            pointAgeFrames >= minimumPointAgeFrames;
+
+        const bool neverConfirmed =
+            quality.pnpInlierCount == 0;
+
+        // Le point est considéré récemment retrouvé s'il a produit 
+        // un bon match dans la fenêtre temporelle récente.
+        const bool recentlyMatched =
+            quality.lastMatchedFrameIndex >= 0 &&
+            (currentFrameIndex - quality.lastMatchedFrameIndex) < maximumUnmatchedAgeFrames;
+
+        const bool shouldCull =
+            oldEnough &&
+            neverConfirmed &&
+            !recentlyMatched;
+
+        if (oldEnough && neverConfirmed && recentlyMatched)
+        {
+            ++protectedByRecentMatch;
+        }
+
+        if (shouldCull)
+        {
+            ++removedPoints;
+            continue;
+        }
+
+        const int newIndex =
+            static_cast<int>(
+                newMapPoints.size()
+            );
+
+        oldToNew[oldIndex] = newIndex;
+
+        newMapPoints.push_back(
+            mapPoints[oldIndex]
+        );
+
+        newMapPointQualities.push_back(quality);
+
+        newMapDescriptors.push_back(
+            mapDescriptors.row(
+                static_cast<int>(oldIndex)
+            )
+        );
+    }
+
+    // -------------------------------------------------------------
+    // Les associations keypoint -> mapPoint utilisent les anciens
+    // indices. Il faut donc impérativement les remapper.
+    // -------------------------------------------------------------
+    auto remapAssociations =
+        [&oldToNew](std::vector<int>& associations)
+    {
+            for (int& mapPointIndex : associations)
+            {
+                if (mapPointIndex < 0)
+                {
+                    continue;
+                }
+
+                if (mapPointIndex >=
+                    static_cast<int>(oldToNew.size()))
+                {
+                    mapPointIndex = -1;
+                    continue;
+                }
+
+                mapPointIndex = oldToNew[mapPointIndex];
+            }
+    };
+
+    remapAssociations(
+        keyframeMapPointIndices
+    );
+
+    // Installation de la carte compactée
+    mapPoints.swap(
+        newMapPoints
+    );
+
+    mapPointQualities.swap(
+        newMapPointQualities
+    );
+
+    mapDescriptors = newMapDescriptors;
+
+    std::cout << "[MAP CULLING]"
+              << " removed: "
+              << removedPoints
+              << " | protected by recent match: "
+              << protectedByRecentMatch
+              << " | size: "
+              << oldMapSize
+              << " -> "
+              << mapPoints.size()
+              << '\n';
+
+    return removedPoints;
+}
 
 
 int addNewMapPointsBetweenKeyframes(
@@ -1145,6 +1305,32 @@ int main(int argc, char* argv[])
                       << removedDuplicateImageMatches
                       << '\n';
 
+            // ---------------------------------------------------------
+            // Dernière apparition visuelle des points de carte.
+            // 
+            // mapGoodMatches a déjà passé:
+            //      - Lowe
+            //      - l'unicité côté keypoint 2D.
+            // 
+            // On met cette info à jour AVANT PnP.
+            // Ainsi, même si la pose est ensuite rejetée, on sait que
+            // le descripteur du point est encore retrouvé dans l'image.
+            // ---------------------------------------------------------
+            for (const cv::DMatch& match : mapGoodMatches)
+            {
+                const int mapPointIndex = match.queryIdx;
+
+                if (mapPointIndex < 0 ||
+                    mapPointIndex >= static_cast<int>(
+                        mapPointQualities.size()
+                        ))
+                {
+                    std::cerr << "Error: invalid map point index while updating last match.\n";
+                    return 1;
+                }
+
+                mapPointQualities[mapPointIndex].lastMatchedFrameIndex = frameIndex;
+            }
             // Construction des correspondances:
             // point 3D de la carte <-> point 2D de l'image
             std::vector<cv::Point3f> pnpObjectPoints;
@@ -1589,6 +1775,7 @@ int main(int argc, char* argv[])
 
                     quality.creationFrameIndex = frameIndex;
                     quality.lastSeenFrameIndex = frameIndex;
+                    quality.lastMatchedFrameIndex = frameIndex;
 
                     mapPointQualities.push_back(
                         quality
@@ -1698,6 +1885,48 @@ int main(int argc, char* argv[])
                           << " | low confirmation ratio: "
                           << lowPnPConfirmationRatio
                           << '\n';
+
+
+                const int minimumCullingAgeFrames = 12 * frameStep;
+
+                // Un point qui a encore produit un bon match au cours des
+                // 4 derniers intervalles (~2 secondes) est protégé du culling
+                const int maximumUnmatchedAgeFrames = 4 * frameStep;
+
+                const int culledMapPoints = 
+                    cullOldNeverConfirmedMapPoints(
+                        frameIndex,
+                        minimumCullingAgeFrames,
+                        maximumUnmatchedAgeFrames,
+
+                        mapPoints,
+                        mapDescriptors,
+                        mapPointQualities,
+
+                        keyframeMapPointIndices,
+                        currentMapPointIndices
+                    );
+
+                if (culledMapPoints < 0)
+                {
+                    return 1;
+                }
+
+                if (mapPoints.size() != static_cast<std::size_t>(mapDescriptors.rows) ||
+                    mapPoints.size() != mapPointQualities.size())
+                {
+                    std::cerr << "Error: map data size mismatch after culling"
+                              << " | points: "
+                              << mapPoints.size()
+                              << " | descriptors: "
+                              << mapDescriptors.rows
+                              << " | qualities: "
+                              << mapPointQualities.size()
+                              << '\n';
+
+                    return 1;
+                }
+
 
                 // La frame courante devient maintenant la nouvelle keyframe
                 lastSelectedKeyframeFrameIndex = frameIndex;
@@ -2192,6 +2421,7 @@ int main(int argc, char* argv[])
             {
                 quality.creationFrameIndex = frameIndex;
                 quality.lastSeenFrameIndex = frameIndex;
+                quality.lastMatchedFrameIndex = frameIndex;
             }
 
             if (mapPointQualities.size() != mapPoints.size())
