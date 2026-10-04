@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <cstdint>
+#include <utility>
 
 #include <opencv2/opencv.hpp>
 
@@ -47,6 +48,37 @@ struct MapPointQuality
 };
 
 using MapPointId = std::uint64_t;
+
+// valeur réservée signifiant "aucun point 3D valide"
+constexpr MapPointId invalidMapPointId =    
+    std::numeric_limits<MapPointId>::max();
+
+// -----------------------------------------------------------------
+// Observation d'un point 3D dans une keyframe.
+// 
+// mapPointId est stable même si le culling compacte mapPoints.
+// -----------------------------------------------------------------
+struct KeyframeObservation
+{
+    MapPointId mapPointId = invalidMapPointId;
+
+    cv::Point2d imagePoint;
+};
+
+// ----------------------------------------------------------------
+// Infos nécessaires au futur Bundle Adjustment
+// 
+// Convention: X_camera = Rcw * X_world + tcw
+// ----------------------------------------------------------------
+struct KeyframeRecord
+{
+    int frameIndex = -1;
+
+    cv::Mat worldToCameraRotation;
+    cv::Mat translationVector;
+
+    std::vector<KeyframeObservation> observations;
+};
 
 
 int cullOldNeverConfirmedMapPoints(
@@ -581,9 +613,6 @@ int addNewMapPointsBetweenKeyframes(
         }
 
 
-
-
-
         // -------------------------------------------------------
         // Reprojection dans la keyframe
         // -------------------------------------------------------
@@ -719,6 +748,95 @@ int addNewMapPointsBetweenKeyframes(
     return addedPoints;
 }
 
+
+bool createKeyframeRecord(
+    int frameIndex,
+
+    const std::vector<cv::KeyPoint>& keypoints,
+    const std::vector<int>& keypointMapPointIndices,
+
+    const std::vector<MapPointId>& mapPointIds,
+
+    const cv::Mat& worldToCameraRotation,
+    const cv::Mat& translationVector,
+
+    KeyframeRecord& record)
+{
+    // Une association est définie pour chacun des keypoints.
+    if (keypoints.size() != keypointMapPointIndices.size())
+    {
+        std::cerr << "Error: keyframe keypoint/association mismatch.\n";
+        return false;
+    }
+
+    record = KeyframeRecord{};
+
+    record.frameIndex = frameIndex;
+
+    record.worldToCameraRotation = 
+        worldToCameraRotation.clone();
+
+    record.translationVector = 
+        translationVector.clone();
+
+    record.observations.reserve(
+        keypoints.size()
+    );
+
+
+    for (std::size_t keypointIndex = 0;
+        keypointIndex < keypoints.size();
+        ++keypointIndex)
+    {
+        const int mapPointIndex = 
+            keypointMapPointIndices[keypointIndex];
+
+        // Ce keypoint n'a aucune association 3D.
+        if (mapPointIndex < 0)
+        {
+            continue;
+        }
+
+        if (mapPointIndex >=
+            static_cast<int>(mapPointIds.size())
+            )
+        {
+            std::cerr << "Error: invalid map point index "
+                      << "while rerecording keyframe"
+                      << " | frame: "
+                      << frameIndex
+                      << " | map index: "
+                      << mapPointIndex
+                      << " | map size: "
+                      << mapPointIds.size()
+                      << '\n';
+
+            return false;
+        }
+
+
+        KeyframeObservation observation;
+
+        observation.mapPointId = 
+            mapPointIds[mapPointIndex];
+
+        observation.imagePoint = 
+            cv::Point2d(
+                static_cast<double>(
+                    keypoints[keypointIndex].pt.x
+                ),
+                static_cast<double>(
+                    keypoints[keypointIndex].pt.y
+                )
+            );
+
+        record.observations.push_back(
+            observation
+        );
+    }
+
+    return true;
+}
 
 
 int main(int argc, char* argv[])
@@ -1014,7 +1132,7 @@ int main(int argc, char* argv[])
 
 
     // Identifiant stable de chaque point 3D.
-    // Contrairement à l'indice dans mapPoints, cet ID ne chnge
+    // Contrairement à l'indice dans mapPoints, cet ID ne change
     // jamais lors d'un culling.
     std::vector<MapPointId> mapPointIds;
 
@@ -1069,6 +1187,16 @@ int main(int argc, char* argv[])
     // 
     // 4 * frameStep = environ 2 secondes
     const int maximumMappingAnchorGapFrames = 4 * frameStep;
+
+    // Historique des keyframes sélectionnées.
+    // 
+    // Pour l'instant on les conserve toutes.
+    // Le local BA utilisera ensuite uniquement les dernières
+    // keyframes de cet historique.
+    std::vector<KeyframeRecord> keyframeHistory;
+
+    keyframeHistory.reserve(64);
+
 
 
     // ----------------------------------------------------------------
@@ -1953,7 +2081,8 @@ int main(int argc, char* argv[])
                 }
 
                 if (mapPoints.size() != static_cast<std::size_t>(mapDescriptors.rows) ||
-                    mapPoints.size() != mapPointQualities.size())
+                    mapPoints.size() != mapPointQualities.size() ||
+                    mapPoints.size() != mapPointIds.size())
                 {
                     std::cerr << "Error: map data size mismatch after culling"
                               << " | points: "
@@ -1962,12 +2091,58 @@ int main(int argc, char* argv[])
                               << mapDescriptors.rows
                               << " | qualities: "
                               << mapPointQualities.size()
+                              << " | IDs: "
+                              << mapPointIds.size()
                               << '\n';
 
                     return 1;
                 }
 
+                // ----------------------------------------------------------------
+                // Sauvegarde de la keyframe dans l'hstorique destiné au 
+                // Bundle Adjustement.
+                // 
+                // Le culling vient d'être effectué:
+                // currentMapPointIndices utilise donc déjà les indices compactés
+                // de la carte.
+                // 
+                // createKeyframeRecord() convertit immédiatement ces indices
+                // temporaires en MapPointId premanents.
+                // ----------------------------------------------------------------
+                KeyframeRecord currentKeyframeRecord;
 
+                if (!createKeyframeRecord(
+                    frameIndex,
+
+                    currentKeypoints,
+                    currentMapPointIndices,
+
+                    mapPointIds,
+
+                    worldToCameraRotation,
+                    translationVector,
+
+                    currentKeyframeRecord))
+                {
+                    return 1;
+                }
+
+                keyframeHistory.push_back(
+                    std::move(currentKeyframeRecord)
+                );
+
+                std::cout << "[KEYFRAME HISTORY] frame: "
+                          << frameIndex
+                          << " | observations: "
+                          << keyframeHistory.back().observations.size()
+                          << " | stored keyframes: "
+                          << keyframeHistory.size()
+                          << '\n';
+
+                // -------------------------------------------------------------
+                // Sauvegarde 
+                // -------------------------------------------------------------
+                
                 // La frame courante devient maintenant la nouvelle keyframe
                 lastSelectedKeyframeFrameIndex = frameIndex;
 
@@ -2510,6 +2685,38 @@ int main(int argc, char* argv[])
             keyframeTranslationVector = relativeTranslation.clone();
 
             lastSelectedKeyframeFrameIndex = frameIndex;
+
+            KeyframeRecord initialKeyframeRecord;
+
+            if (!createKeyframeRecord(
+                frameIndex,
+
+                currentKeypoints,
+                bootstrapMapPointIndices,
+
+                mapPointIds,
+
+                relativeRotation,
+                relativeTranslation,
+
+                initialKeyframeRecord))
+            {
+                return 1;
+            }
+
+
+            keyframeHistory.push_back(
+                std::move(initialKeyframeRecord)
+            );
+
+            std::cout << "[KEYFRAME HISTORY]"
+                      << " frame: "
+                      << frameIndex
+                      << " | observations: "
+                      << keyframeHistory.back().observations.size()
+                      << " | stored keyframes: "
+                      << keyframeHistory.size()
+                      << '\n';
 
             std::cout << "\n[KEYFRAME] Initial keyframe: frame "
                       << keyframeFrameIndex
