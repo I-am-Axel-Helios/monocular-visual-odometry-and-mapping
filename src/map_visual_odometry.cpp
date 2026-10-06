@@ -10,6 +10,8 @@
 #include <limits>
 #include <cstdint>
 #include <utility>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <opencv2/opencv.hpp>
 
@@ -838,6 +840,171 @@ bool createKeyframeRecord(
     return true;
 }
 
+bool refreshStoredKeyframeRecord(
+    std::vector<KeyframeRecord>& keyframeHistory,
+
+    int frameIndex,
+
+    const std::vector<cv::KeyPoint>& keypoints,
+    const std::vector<int>& keypointMapPointIndices,
+
+    const std::vector<MapPointId>& mapPointIds,
+
+    const cv::Mat& worldToCameraRotation,
+    const cv::Mat& translationVector)
+{   
+    auto keyframeIterator =
+        std::find_if(
+            keyframeHistory.rbegin(),
+            keyframeHistory.rend(),
+
+            [frameIndex](const KeyframeRecord& record)
+            {
+                return record.frameIndex == frameIndex;
+            }
+        );
+
+    if (keyframeIterator == keyframeHistory.rend())
+    {
+        std::cerr << "Error: mapping anchor frame "
+                  << frameIndex
+                  << " not found in keyframe history.\n";
+
+        return false;
+    }
+
+
+    KeyframeRecord refreshedRecord;
+
+    if (!createKeyframeRecord(
+        frameIndex,
+
+        keypoints,
+        keypointMapPointIndices,
+
+        mapPointIds,
+
+        worldToCameraRotation,
+        translationVector,
+
+        refreshedRecord))
+    {
+        return false;
+    }
+
+    std::cout << "[KEYFRAME REFRESH] frame: "
+              << frameIndex
+              << " | refreshed observations: "
+              << refreshedRecord.observations.size()
+              << '\n';
+
+    *keyframeIterator = std::move(refreshedRecord);
+
+    return true;
+}
+
+void printLocalBundleAdjustmentConnectivity(
+    const std::vector<KeyframeRecord>& keyframeHistory,
+    const std::vector<MapPointId>& activeMapPointIds,
+    std::size_t windowSize)
+{   
+    if (keyframeHistory.empty())
+    {
+        return;
+    }
+
+    const std::size_t actualWindowSize = 
+        std::min(
+            windowSize,
+            keyframeHistory.size()
+        );
+
+    const std::size_t firstKeyframeIndex = 
+        keyframeHistory.size() - actualWindowSize;
+
+    std::unordered_set<MapPointId> activeMapPointIdSet(
+            activeMapPointIds.begin(),
+            activeMapPointIds.end()
+        );
+
+
+    // Nombre de keyframes de la fenêtre dans lesquelles chaque point 3D est observé
+    std::unordered_map<MapPointId, int> observationCounts;
+
+    for (std::size_t keyframeIndex = firstKeyframeIndex;
+        keyframeIndex < keyframeHistory.size();
+        ++keyframeIndex)
+    {
+        const KeyframeRecord& keyframe =
+            keyframeHistory[keyframeIndex];
+
+        for (const KeyframeObservation& observation : keyframe.observations)
+        {
+            // Une ancienne keyframe peut encore contenir l'ID d'un point qui
+            // a depuis été supprimé de la carte.
+            // 
+            // Ces observations historiques ne peuvent pas participer au Bundle 
+            // Adjustment de la carte active.
+            if (!activeMapPointIdSet.contains(observation.mapPointId))
+            {
+                continue;
+            }
+            
+            ++observationCounts[
+                observation.mapPointId
+            ];
+        }
+    }
+
+    int observedAtLeastOnce = 0;
+    int observedAtLeastTwice = 0;
+    int observedAtLeastThreeTimes = 0;
+    int observedAtLeastFourTimes = 0;
+    int observedInEveryKeyframe = 0;
+
+    for (const auto& [mapPointId, count] : observationCounts)
+    {
+        (void)mapPointId;
+
+        if (count >= 1) ++observedAtLeastOnce;
+        if (count >= 2) ++observedAtLeastTwice;
+        if (count >= 3) ++observedAtLeastThreeTimes;
+        if (count >= 4) ++observedAtLeastFourTimes;
+        if (count >=
+            static_cast<int>(actualWindowSize))
+        {
+            ++observedInEveryKeyframe;
+        }
+    }
+
+    std::cout << "[LOCAL BA WINDOW] keyframes: "
+              << actualWindowSize
+              << " | frames: ";
+
+    for (std::size_t keyframeIndex = firstKeyframeIndex;
+        keyframeIndex < keyframeHistory.size();
+        ++keyframeIndex)
+    {
+        std::cout << keyframeHistory[keyframeIndex].frameIndex;
+
+        if (keyframeIndex + 1 < keyframeHistory.size())
+        {
+            std::cout << ",";
+        }
+    }
+
+    std::cout << " | unique points: "
+              << observedAtLeastOnce
+              << " | seen >= 2: "
+              << observedAtLeastTwice
+              << " | seen >= 3: "
+              << observedAtLeastThreeTimes
+              << " | seen >= 4: "
+              << observedAtLeastFourTimes
+              << " | seen in all: "
+              << observedInEveryKeyframe
+              << '\n';
+}
 
 int main(int argc, char* argv[])
 {
@@ -1968,6 +2135,7 @@ int main(int argc, char* argv[])
                     return 1;
                 }
 
+
                 // -----------------------------------------------------------
                 // Diagnostic de qualité de la carte
                 // Aucun point n'est supprimé pour l'instant
@@ -2098,6 +2266,30 @@ int main(int argc, char* argv[])
                     return 1;
                 }
 
+
+                // ------------------------------------------------------------------
+                // La triangulation a potentiellement ajouté de nouvelles
+                // associations au mapping anchor.
+                // 
+                // Son ancien KeyframeRecord a été créé avant que ces nouveaux points
+                // actuelles, après remapping du culling.
+                // ------------------------------------------------------------------
+                if (!refreshStoredKeyframeRecord(
+                    keyframeHistory,
+
+                    keyframeFrameIndex,
+
+                    keyframeKeypoints,
+                    keyframeMapPointIndices,
+
+                    mapPointIds,
+
+                    keyframeWorldToCameraRotation,
+                    keyframeTranslationVector))
+                {
+                    return 1;
+                }
+
                 // ----------------------------------------------------------------
                 // Sauvegarde de la keyframe dans l'hstorique destiné au 
                 // Bundle Adjustement.
@@ -2107,7 +2299,7 @@ int main(int argc, char* argv[])
                 // de la carte.
                 // 
                 // createKeyframeRecord() convertit immédiatement ces indices
-                // temporaires en MapPointId premanents.
+                // temporaires en MapPointId permanents.
                 // ----------------------------------------------------------------
                 KeyframeRecord currentKeyframeRecord;
 
@@ -2131,6 +2323,8 @@ int main(int argc, char* argv[])
                     std::move(currentKeyframeRecord)
                 );
 
+                
+
                 std::cout << "[KEYFRAME HISTORY] frame: "
                           << frameIndex
                           << " | observations: "
@@ -2139,6 +2333,13 @@ int main(int argc, char* argv[])
                           << keyframeHistory.size()
                           << '\n';
 
+
+                printLocalBundleAdjustmentConnectivity(
+                    keyframeHistory,
+                    mapPointIds,
+                    5
+                );
+                
                 // -------------------------------------------------------------
                 // Sauvegarde 
                 // -------------------------------------------------------------
@@ -2717,6 +2918,12 @@ int main(int argc, char* argv[])
                       << " | stored keyframes: "
                       << keyframeHistory.size()
                       << '\n';
+
+            printLocalBundleAdjustmentConnectivity(
+                keyframeHistory,
+                mapPointIds,
+                5
+            );
 
             std::cout << "\n[KEYFRAME] Initial keyframe: frame "
                       << keyframeFrameIndex
