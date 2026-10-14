@@ -12,6 +12,7 @@
 #include <utility>
 #include <unordered_map>
 #include <unordered_set>
+#include <array>
 
 #include <opencv2/opencv.hpp>
 
@@ -83,6 +84,64 @@ struct KeyframeRecord
 };
 
 
+// --------------------------------------------------------------------------
+// Pose locale utilisée par le Bundle Adjustment
+// 
+// parameters[0..2] : rotation angle-axis
+// parameters[3..5] : translation tcw
+// 
+// Convention: X_camera = Rcw * X_world + tcw
+// --------------------------------------------------------------------------
+struct LocalBundleAdjustmentPose
+{
+    int frameIndex = -1;
+
+    std::array<double, 6> parameters{};
+
+
+    // Les deux plus anciennes poses seront fixées pour supprimer
+    // les libertés de jauge du problème monoculaire.
+    bool fixed = false;
+};
+
+
+// --------------------------------------------------------------------------
+// Point 3D actif inclus dans la fenêtre locale
+// --------------------------------------------------------------------------
+struct LocalBundleAdjustmentPoint
+{
+    MapPointId mapPointId = invalidMapPointId;
+
+    // Indice actuel dans mapPoints
+    // 
+    // Valable que pour l'état courant de la carte
+    int globalMapPointIndex = -1;
+
+    std::array<double, 3> position{};
+};
+
+
+// ----------------------------------------------------------------------
+// Mesure 2D reliant une pose locale à un point 3D local
+// ----------------------------------------------------------------------
+struct LocalBundleAdjustmentObservation
+{
+    int poseIndex= -1;
+    int pointIndex = -1;
+
+    cv::Point2d imagePoint;
+};
+
+
+// ------------------------------------------------------------------------
+// Problème complet envoyé plus tard à l'optimiseur
+// ------------------------------------------------------------------------
+struct LocalBundleAdjustmentProblem
+{
+    std::vector<LocalBundleAdjustmentPose> poses;
+    std::vector<LocalBundleAdjustmentPoint> points;
+    std::vector<LocalBundleAdjustmentObservation> observations;
+};
 int cullOldNeverConfirmedMapPoints(
     int currentFrameIndex,
     int minimumPointAgeFrames,
@@ -1004,6 +1063,355 @@ void printLocalBundleAdjustmentConnectivity(
               << " | seen in all: "
               << observedInEveryKeyframe
               << '\n';
+}
+
+
+bool buildLocalBundleAdjustmentProblem(
+    const std::vector<KeyframeRecord>& keyframeHistory,
+
+    const std::vector<cv::Point3f>& mapPoints,
+    const std::vector<MapPointId>& mapPointIds,
+
+    const cv::Mat& cameraMatrix,
+    const cv::Mat& distortionCoefficients,
+
+    std::size_t windowSize,
+
+    LocalBundleAdjustmentProblem& problem)
+{
+    problem = LocalBundleAdjustmentProblem{};
+
+    // ---------------------------------------------------------------
+    // Vérif de cohérence de la carte active
+    // ---------------------------------------------------------------
+    if (mapPoints.size() != mapPointIds.size())
+    {
+        std::cerr << "Error: point/ID mismatch while building local BA\n";
+        return false;
+    }
+
+    if (keyframeHistory.size() < windowSize)
+    {
+        return true;
+    }
+
+    const std::size_t firstKeyframeIndex = 
+        keyframeHistory.size() - windowSize;
+
+    // ----------------------------------------------------------------
+    // ID stable -> indice courant dans mapPoints
+    // 
+    // Ceci permet de retrouver la position 3D actuelle d'un MapPointId
+    // historique
+    // ----------------------------------------------------------------
+    std::unordered_map<MapPointId, int> activeMapPointIndices;
+
+    activeMapPointIndices.reserve(
+        mapPointIds.size()
+    );
+
+    for (std::size_t mapPointIndex = 0;
+        mapPointIndex < mapPointIds.size();
+        ++mapPointIndex)
+    {
+        const MapPointId mapPointId = mapPointIds[mapPointIndex];
+
+        const auto [iterator, inserted] = 
+            activeMapPointIndices.emplace(
+                mapPointId,
+                static_cast<int>(mapPointIndex)
+            );
+
+        (void)iterator;
+
+        if (!inserted) 
+        {
+            std::cerr << "Error: duplicate MapPointId "
+                      << mapPointId
+                      << " in active map.\n";
+
+            return false;
+        }
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Première passe:
+    // 
+    // combien de keyframes différentes observent chaque point ?
+    // 
+    // Un point vu dans une seule keyframe n'est pas retenu pour le BA local
+    // ---------------------------------------------------------------------
+    std::unordered_map<MapPointId, int> observationCounts;
+
+    for (std::size_t historyIndex = firstKeyframeIndex;
+        historyIndex < keyframeHistory.size();
+        ++historyIndex)
+    {
+        const KeyframeRecord& keyframe = 
+            keyframeHistory[historyIndex];
+
+
+        // Protection supplémentaire contre une éventuelle observation
+        // dupliquée dans une même keyframe
+        std::unordered_set<MapPointId> seenInThisKeyframe;
+
+        for (const KeyframeObservation& observation : keyframe.observations)
+        {
+            if (!activeMapPointIndices.contains(
+                observation.mapPointId
+            ))
+            {
+                continue;
+            }
+
+            if (!seenInThisKeyframe.insert(
+                observation.mapPointId
+            ).second)
+            {
+                continue;
+            }
+
+            ++observationCounts[observation.mapPointId];
+        }
+    }
+
+
+    // ------------------------------------------------------------------
+    // Construction des 5 poses locales
+    // ------------------------------------------------------------------
+    problem.poses.reserve(
+        windowSize
+    );
+
+    for (std::size_t localPoseIndex = 0;
+        localPoseIndex < windowSize;
+        ++localPoseIndex)
+    {
+        const KeyframeRecord& keyframe = 
+            keyframeHistory[
+                firstKeyframeIndex + localPoseIndex
+            ];
+
+        cv::Mat rotation64;
+        cv::Mat translation64;
+
+        keyframe.worldToCameraRotation.convertTo(
+            rotation64, CV_64F
+        );
+
+        keyframe.translationVector.convertTo(
+            translation64, CV_64F
+        );
+
+
+        // Conversion matrice de rotation -> vecteur angle-axis.
+        // 
+        // OpenCV appelle cette représentation un "rotation vector"
+        cv::Mat rotationVector;
+
+        cv::Rodrigues(
+            rotation64, rotationVector
+        );
+
+        LocalBundleAdjustmentPose pose;
+
+        pose.frameIndex = keyframe.frameIndex;
+
+        pose.parameters[0] = rotationVector.at<double>(0, 0);
+
+        pose.parameters[1] = rotationVector.at<double>(1, 0);
+
+        pose.parameters[2] = rotationVector.at<double>(2, 0);
+
+        pose.parameters[3] = translation64.at<double>(0, 0);
+
+        pose.parameters[4] = translation64.at<double>(1, 0);
+
+        pose.parameters[5] = translation64.at<double>(2, 0);
+
+
+        // Deux poses fixes:
+        // Cela va préserver le repère & l'échelle déjà établis par notre V0 monoculaire
+        pose.fixed = localPoseIndex < 2;
+
+        problem.poses.push_back(pose);
+    }
+
+    // --------------------------------------------------------------------------
+    // Construction des points ayant au moins 2 observations.
+    // 
+    // On parcourt mapPointIds plutôt que l'unordered_map pour conserver un ordre
+    // deterministe entre les exécutions.
+    // --------------------------------------------------------------------------
+    std::unordered_map<MapPointId, int> localPointIndices;
+
+    for (std::size_t globalPointIndex = 0;
+        globalPointIndex < mapPointIds.size();
+        ++globalPointIndex)
+    {
+        const MapPointId mapPointId = mapPointIds[globalPointIndex];
+        const auto countIterator = 
+            observationCounts.find(mapPointId);
+
+        if (countIterator == observationCounts.end())
+        {
+            continue;
+        }
+
+        if (countIterator->second < 2)
+        {
+            continue;
+        }
+
+        LocalBundleAdjustmentPoint point;
+
+        point.mapPointId = mapPointId;
+        point.globalMapPointIndex = 
+            static_cast<int>(globalPointIndex);
+
+        point.position[0] = 
+            static_cast<double>(
+                mapPoints[globalPointIndex].x
+            );
+
+        point.position[1] =
+            static_cast<double>(
+                mapPoints[globalPointIndex].y
+            );
+
+        point.position[2] =
+            static_cast<double>(
+                mapPoints[globalPointIndex].z
+            );
+
+        const int localPointIndex =
+            static_cast<int>(
+                problem.points.size()
+            );
+
+        localPointIndices.emplace(
+            mapPointId, localPointIndex
+        );
+
+        problem.points.push_back(
+            point
+        );
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Deuxième passe: construction des arêtes 2D du graphe BA
+    // ---------------------------------------------------------------------
+    for (std::size_t localPoseIndex = 0;
+        localPoseIndex < windowSize;
+        ++localPoseIndex)
+    {
+        const KeyframeRecord& keyframe = 
+            keyframeHistory[
+                firstKeyframeIndex + localPoseIndex
+            ];
+
+        std::unordered_set<MapPointId> seenInThisKeyframe;
+
+        for (const KeyframeObservation& observation : keyframe.observations)
+        {
+            const auto pointIterator = 
+                localPointIndices.find(observation.mapPointId);
+
+            if (pointIterator == localPointIndices.end())
+            {
+                continue;
+            }
+
+            if (!seenInThisKeyframe.insert(observation.mapPointId).second)
+            {
+                continue;
+            }
+
+            LocalBundleAdjustmentObservation localObservation;
+
+            localObservation.poseIndex = 
+                static_cast<int>(localPoseIndex);
+
+            localObservation.pointIndex =
+                pointIterator->second;
+
+            std::vector<cv::Point2f> distortedPoints{
+                cv::Point2f(
+                    static_cast<float>(observation.imagePoint.x),
+                    static_cast<float>(observation.imagePoint.y)
+                )
+            };
+
+            std::vector<cv::Point2f> undistortedPoints;
+
+            cv::undistortPoints(
+                distortedPoints,
+                undistortedPoints,
+                cameraMatrix,
+                distortionCoefficients,
+                cv::noArray(),
+                cameraMatrix
+            );
+
+            if (undistortedPoints.size() != 1)
+            {
+                std::cerr << "Error: failed to undistort BA observation.\n";
+                return false;
+            }
+
+
+            localObservation.imagePoint = 
+                cv::Point2d(
+                    static_cast<double>(undistortedPoints[0].x),
+                    static_cast<double>(undistortedPoints[0].y)
+                );
+
+
+            problem.observations.push_back(localObservation);
+        }
+    }
+
+
+    // -------------------------------------------------------------------
+    // Diagnostic par pose
+    // -------------------------------------------------------------------
+    std::vector<int> observationsPerPose(
+        problem.poses.size(), 0
+    );
+
+    for (const LocalBundleAdjustmentObservation& observation : problem.observations)
+    {
+        ++observationsPerPose[observation.poseIndex];
+    }
+
+    std::cout << "[LOCAL BA PROBLEM] poses: "
+              << problem.poses.size()
+              << " | points: "
+              << problem.points.size()
+              << " | observations: "
+              << problem.observations.size()
+              << " | fixed poses: 2"
+              << " | observations/pose: ";
+
+    for (std::size_t poseIndex = 0;
+        poseIndex < observationsPerPose.size();
+        ++poseIndex)
+    {
+        std::cout << problem.poses[poseIndex].frameIndex
+                  << ":"
+                  << observationsPerPose[poseIndex];
+
+        if (poseIndex + 1 < observationsPerPose.size())
+        {
+            std::cout << ",";
+        }
+    }
+
+    std::cout << '\n';
+
+    return true;
 }
 
 int main(int argc, char* argv[])
@@ -2339,6 +2747,28 @@ int main(int argc, char* argv[])
                     mapPointIds,
                     5
                 );
+
+
+                if (keyframeHistory.size() >= 5)
+                {
+                    LocalBundleAdjustmentProblem localBundleAdjustmentProblem;
+
+                    if (!buildLocalBundleAdjustmentProblem(
+                        keyframeHistory,
+
+                        mapPoints,
+                        mapPointIds,
+
+                        cameraMatrix,
+                        distortionCoefficients,
+
+                        5,
+
+                        localBundleAdjustmentProblem))
+                    {
+                        return 1;
+                    }
+                }
                 
                 // -------------------------------------------------------------
                 // Sauvegarde 
