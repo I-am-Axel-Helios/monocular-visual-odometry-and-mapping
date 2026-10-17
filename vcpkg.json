@@ -1,6 +1,7 @@
 {
   "dependencies": [
     "opencv4",
-    "eigen3"
+    "eigen3",
+    "ceres"
   ]
 }

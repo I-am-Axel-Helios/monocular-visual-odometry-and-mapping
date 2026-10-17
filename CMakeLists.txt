@@ -31,6 +31,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ------------------------------------------------------------
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 CONFIG REQUIRED)
+find_package(Ceres CONFIG REQUIRED)
 
 
 # ------------------------------------------------------------
@@ -133,4 +134,5 @@ target_link_libraries(
     PRIVATE
         ${OpenCV_LIBS}
         Eigen3::Eigen
+        Ceres::ceres
 )
