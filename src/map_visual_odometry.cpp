@@ -16,6 +16,9 @@
 
 #include <opencv2/opencv.hpp>
 
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
+
 
 namespace fs = std::filesystem;
 
@@ -142,6 +145,105 @@ struct LocalBundleAdjustmentProblem
     std::vector<LocalBundleAdjustmentPoint> points;
     std::vector<LocalBundleAdjustmentObservation> observations;
 };
+
+// ------------------------------------------------------------------
+// Résidu de reprojection utilisé par Ceres pour le Bundle
+// Adjustment local.
+// 
+// Paramètres caméra:
+//      camera[0..2] = rotation angle-axis
+//      camera[3..5] = translation tcw
+// 
+// Paramètres point:
+//      point[0..2] = coordonnées 3D dans le repère monde
+// 
+// Convention: X_camera = Rcw * X_world + tcw
+// 
+// Les observations 2D fournies à ce résidu sont déjà UNDISTORTED
+// On utilise donc un modèle pinhole simple, sans k1, k2, p1, p2 ...
+// ------------------------------------------------------------------
+struct BundleAdjustmentReprojectionResidual
+{
+    BundleAdjustmentReprojectionResidual(
+        double observedX, double observedY,
+        double fx, double fy,
+        double cx, double cy) :
+        observedX(observedX), observedY(observedY),
+        fx(fx), fy(fy), cx(cx), cy(cy)
+    {
+    }
+
+    template <typename T> bool operator()(
+        const T* const camera,
+        const T* const point,
+        T* residuals) const
+    {
+        // -----------------------------------------------------------
+        // Rotation du point monde vers le repère caméra.
+        // 
+        // camera[0..2] est une rotation angle-axis.
+        // -----------------------------------------------------------
+        T pointCamera[3];
+
+        ceres::AngleAxisRotatePoint(
+            camera, point, pointCamera
+        );
+
+
+        // ------------------------------------------------------------
+        // Translation monde -> caméra
+        // ------------------------------------------------------------
+        pointCamera[0] += camera[3];
+        pointCamera[1] += camera[4];
+        pointCamera[2] += camera[5];
+
+
+        // -----------------------------------------------------------
+        // Projection perspective pinhole
+        // 
+        // xn = Xc/Zc & yn = Yc/Zc
+        // -----------------------------------------------------------
+        const T normalizedX =
+            pointCamera[0] / pointCamera[2];
+
+        const T normalizedY =
+            pointCamera[1] / pointCamera[2];
+
+        // -----------------------------------------------------------
+        // Passage aux coordonnées pixels
+        // -----------------------------------------------------------
+        const T projectedX =
+            T(fx) * normalizedX + T(cx);
+
+        const T projectedY =
+            T(fy) * normalizedY + T(cy);
+
+
+        // -----------------------------------------------------------
+        // Résidu = projection prédite - observation mésurée
+        // 
+        // Ceres cherchera à rendre ces deux valeurs aussi proches de 
+        // zéro que possible.
+        // -----------------------------------------------------------
+        residuals[0] =
+            projectedX - T(observedX);
+
+        residuals[1] =
+            projectedY - T(observedY);
+
+        return true;
+    }
+
+    double observedX = 0.0;
+    double observedY = 0.0;
+
+    double fx = 0.0;
+    double fy = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
+};
+
+
 int cullOldNeverConfirmedMapPoints(
     int currentFrameIndex,
     int minimumPointAgeFrames,
@@ -1413,6 +1515,238 @@ bool buildLocalBundleAdjustmentProblem(
 
     return true;
 }
+
+bool runLocalBundleAdjustment(
+    LocalBundleAdjustmentProblem& localProblem,
+    const cv::Mat& cameraMatrix)
+{
+    if (localProblem.poses.empty() ||
+        localProblem.points.empty() ||
+        localProblem.observations.empty())
+    {
+        std::cerr << "Error: empty local BA problem.\n";
+        return false;
+    }
+
+    if (cameraMatrix.rows != 3 || cameraMatrix.cols != 3)
+    {
+        std::cerr << "Error: invalid camera matrix for local BA.\n";
+        return false;
+    }
+
+    // ------------------------------------------------------------
+    // Intrinsèques de la caméra
+    // ------------------------------------------------------------
+    cv::Mat cameraMatrix64;
+
+    cameraMatrix.convertTo(
+        cameraMatrix64, CV_64F
+    );
+
+    const double fx = 
+        cameraMatrix64.at<double>(0, 0);
+
+    const double fy =
+        cameraMatrix64.at<double>(1, 1);
+
+    const double cx =
+        cameraMatrix64.at<double>(0, 2);
+
+    const double cy =
+        cameraMatrix64.at<double>(1, 2);
+
+
+    // -------------------------------------------------------------
+    // Création du problème Ceres
+    // -------------------------------------------------------------
+    ceres::Problem ceresProblem;
+
+
+    // -------------------------------------------------------------
+    // Ajout explicite des poses
+    // 
+    // Chaque pose = 6 params:
+    //      angle-axis (3) & translation (3)
+    // -------------------------------------------------------------
+    for (LocalBundleAdjustmentPose& pose : localProblem.poses)
+    {
+        ceresProblem.AddParameterBlock(
+            pose.parameters.data(), 6
+        );
+
+        // Fixation des deux plus anciennes poses
+        if (pose.fixed)
+        {
+            ceresProblem.SetParameterBlockConstant(
+                pose.parameters.data()
+            );
+        }
+    }
+
+    // --------------------------------------------------------------
+    // Points 3D
+    // --------------------------------------------------------------
+    for (LocalBundleAdjustmentPoint& point : localProblem.points)
+    {
+        ceresProblem.AddParameterBlock(
+            point.position.data(), 3
+        );
+    }
+
+    // --------------------------------------------------------------
+    // Huber loss
+    // 
+    // Une observation ayant une grosse erreur de reprojection aura 
+    // moins d'influence sur l'optimisation.
+    // 
+    // Delta = 2 px
+    // --------------------------------------------------------------
+    ceres::LossFunction* huberLoss =
+        new ceres::HuberLoss(2.0);
+
+
+    // --------------------------------------------------------------
+    // Une observation 2D = un bloc résiduel de dimension 2
+    // --------------------------------------------------------------
+    for (const LocalBundleAdjustmentObservation& observation : 
+            localProblem.observations)
+    {
+        if (observation.poseIndex < 0 ||
+            observation.poseIndex >=
+            static_cast<int>(localProblem.poses.size()) ||
+            observation.pointIndex < 0 ||
+            observation.pointIndex >=
+            static_cast<int>(localProblem.points.size()))
+        {
+            std::cerr << "Error: invalid local BA observation index.\n";
+            return false;
+        }
+
+        LocalBundleAdjustmentPose& pose =
+            localProblem.poses[observation.poseIndex];
+
+        LocalBundleAdjustmentPoint& point =
+            localProblem.points[observation.pointIndex];
+
+        ceres::CostFunction* costFunction =
+            new ceres::AutoDiffCostFunction<
+                BundleAdjustmentReprojectionResidual, 2, 6, 3
+            >(
+                new BundleAdjustmentReprojectionResidual(
+                    observation.imagePoint.x, observation.imagePoint.y,
+                    fx, fy,
+                    cx, cy
+                )
+            );
+
+        ceresProblem.AddResidualBlock(
+            costFunction,
+            huberLoss,
+            pose.parameters.data(),
+            point.position.data()
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Mesure AVANT optimisation
+    // 
+    // Ici, on désactive volontairement la Huber Loss afin de calculer
+    // une vraie erreur quadratique de reprojection.
+    // 
+    // Ceres définit: cost = 1/2 * somme(résidu²)
+    // Donc RMSE_2D = sqrt(2 cost/nbre_observations)
+    // ---------------------------------------------------------------
+    ceres::Problem::EvaluateOptions evaluateOptions;
+
+    evaluateOptions.apply_loss_function = false;
+
+    double initialRawCost = 0.0;
+
+    if (!ceresProblem.Evaluate(
+        evaluateOptions,
+        &initialRawCost,
+        nullptr,
+        nullptr,
+        nullptr))
+    {
+        std::cerr << "Error: could not evaluate local BA before solving.\n";
+        return false;
+    }
+
+
+    const double initialRmse =
+        std::sqrt(
+            2.0 * initialRawCost /
+            static_cast<double>(localProblem.observations.size())
+        );
+
+
+    // ---------------------------------------------------------------
+    // Configuration du solveur
+    // 
+    // Il n'y a que 5 poses dans notre fenêtre.
+    // DENSE_SCHUR est donc très adapté et simple pour ce premier BA.
+    // ---------------------------------------------------------------
+    ceres::Solver::Options options;
+
+    options.linear_solver_type =
+        ceres::DENSE_SCHUR;
+
+    options.max_num_iterations = 30;
+
+    options.num_threads = 1;
+
+    // ---------------------------------------------------------------
+    // Optimisation
+    // ---------------------------------------------------------------
+    ceres::Solver::Summary summary;
+
+    ceres::Solve(
+        options, &ceresProblem, &summary
+    );
+
+    // ---------------------------------------------------------------
+    // Mesure APRES optimisation
+    // ---------------------------------------------------------------
+    double finalRawCost = 0.0;
+
+    if (!ceresProblem.Evaluate(
+        evaluateOptions, &finalRawCost,
+        nullptr, nullptr, nullptr))
+    {
+        std::cerr << "Error: could not evaluate local BA after solving.\n";
+        return false;
+    }
+
+    const double finalRmse =
+        std::sqrt(
+            2.0 * finalRawCost /
+            static_cast<double>(localProblem.observations.size())
+        );
+
+    // ---------------------------------------------------------------
+    // Diagnostic
+    // ---------------------------------------------------------------
+    std::cout << "[LOCAL BA] poses: "
+        << localProblem.poses.size()
+        << " | points: "
+        << localProblem.points.size()
+        << " | observations: "
+        << localProblem.observations.size()
+        << " | RMSE: "
+        << initialRmse
+        << " -> "
+        << finalRmse
+        << " px"
+        << " | iterations: "
+        << summary.iterations.size()
+        << " | usable: "
+        << (summary.IsSolutionUsable() ? "yes" : "no")
+        << '\n';
+
+    return summary.IsSolutionUsable();
+}
+
 
 int main(int argc, char* argv[])
 {
@@ -2755,17 +3089,18 @@ int main(int argc, char* argv[])
 
                     if (!buildLocalBundleAdjustmentProblem(
                         keyframeHistory,
-
-                        mapPoints,
-                        mapPointIds,
-
-                        cameraMatrix,
-                        distortionCoefficients,
-
+                        mapPoints, mapPointIds,
+                        cameraMatrix,distortionCoefficients,
                         5,
-
                         localBundleAdjustmentProblem))
                     {
+                        return 1;
+                    }
+
+                    if (!runLocalBundleAdjustment(
+                        localBundleAdjustmentProblem, cameraMatrix))
+                    {
+                        std::cerr << "Error: local bundle adjustment failed.\n";
                         return 1;
                     }
                 }
