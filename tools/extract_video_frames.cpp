@@ -9,8 +9,7 @@
 
 namespace fs = std::filesystem;
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     // ---------------------------------------------------------------
     // Arguments du programme
     // 
@@ -21,8 +20,7 @@ int main(int argc, char* argv[])
     // 
     // Exemple: extract_video_frames calibration_video.mp4 frames 1.0
     // ---------------------------------------------------------------
-    if (argc < 4)
-    {
+    if (argc < 4) {
         std::cerr << "Usage: camera_calibration "
                   << "<video_path> "
                   << "<output_directory> "
@@ -36,18 +34,14 @@ int main(int argc, char* argv[])
 
     double intervalSeconds = 0.0;
 
-    try
-    {
+    try {
         intervalSeconds = std::stod(argv[3]);
-    }
-    catch (...)
-    {
+    } catch (...) {
         std::cerr << "Error: interval_seconds must be a number.\n";
         return 1;
     }
 
-    if (intervalSeconds <= 0.0)
-    {
+    if (intervalSeconds <= 0.0) {
         std::cerr << "Error: interval_seconds must be positive.\n";
         return 1;
     }
@@ -60,8 +54,7 @@ int main(int argc, char* argv[])
         videoPath.string()
     );
 
-    if (!video.isOpened())
-    {
+    if (!video.isOpened()) {
         std::cerr << "Error: could not open video: "
                   << videoPath
                   << "\n";
@@ -91,8 +84,7 @@ int main(int argc, char* argv[])
         );
 
 
-    if (fps <= 0.0)
-    {
+    if (fps <= 0.0) {
         std::cerr << "Error: invalid video FPS.\n";
         return 1;
     }
@@ -165,11 +157,9 @@ int main(int argc, char* argv[])
     int currentFrameIndex = 0;
     int savedFrameIndex = 0;
 
-    while (video.read(frame))
-    {
+    while (video.read(frame)) {
         // On ne sauvegarde qu'une frame tous les frameStep
-        if (currentFrameIndex % frameStep == 0)
-        {
+        if (currentFrameIndex % frameStep == 0) {
             std::ostringstream filename;
             // frame_0000.jpg
             // frame_0001.jpg
@@ -190,8 +180,7 @@ int main(int argc, char* argv[])
                     frame
                 );
 
-            if (!success)
-            {
+            if (!success) {
                 std::cerr << "Error: could not save "
                           << outputPath
                           << '\n';

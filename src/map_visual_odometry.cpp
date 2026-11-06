@@ -29,8 +29,7 @@ namespace fs = std::filesystem;
 //      mapPoints[i], mapDescriptors.row(i) et mapPointQualities[i]
 //      représentent toujours le même point physique.
 // ----------------------------------------------------------------
-struct MapPointQuality
-{
+struct MapPointQuality {
     // Frame à laquelle le point 3D a été triangulé
     int creationFrameIndex = -1;
 
@@ -64,8 +63,7 @@ constexpr MapPointId invalidMapPointId =
 // 
 // mapPointId est stable même si le culling compacte mapPoints.
 // -----------------------------------------------------------------
-struct KeyframeObservation
-{
+struct KeyframeObservation {
     MapPointId mapPointId = invalidMapPointId;
 
     cv::Point2d imagePoint;
@@ -76,8 +74,7 @@ struct KeyframeObservation
 // 
 // Convention: X_camera = Rcw * X_world + tcw
 // ----------------------------------------------------------------
-struct KeyframeRecord
-{
+struct KeyframeRecord {
     int frameIndex = -1;
 
     cv::Mat worldToCameraRotation;
@@ -95,8 +92,7 @@ struct KeyframeRecord
 // 
 // Convention: X_camera = Rcw * X_world + tcw
 // --------------------------------------------------------------------------
-struct LocalBundleAdjustmentPose
-{
+struct LocalBundleAdjustmentPose {
     int frameIndex = -1;
 
     std::array<double, 6> parameters{};
@@ -111,8 +107,7 @@ struct LocalBundleAdjustmentPose
 // --------------------------------------------------------------------------
 // Point 3D actif inclus dans la fenêtre locale
 // --------------------------------------------------------------------------
-struct LocalBundleAdjustmentPoint
-{
+struct LocalBundleAdjustmentPoint {
     MapPointId mapPointId = invalidMapPointId;
 
     // Indice actuel dans mapPoints
@@ -127,8 +122,7 @@ struct LocalBundleAdjustmentPoint
 // ----------------------------------------------------------------------
 // Mesure 2D reliant une pose locale à un point 3D local
 // ----------------------------------------------------------------------
-struct LocalBundleAdjustmentObservation
-{
+struct LocalBundleAdjustmentObservation {
     int poseIndex= -1;
     int pointIndex = -1;
 
@@ -139,8 +133,7 @@ struct LocalBundleAdjustmentObservation
 // ------------------------------------------------------------------------
 // Problème complet envoyé plus tard à l'optimiseur
 // ------------------------------------------------------------------------
-struct LocalBundleAdjustmentProblem
-{
+struct LocalBundleAdjustmentProblem {
     std::vector<LocalBundleAdjustmentPose> poses;
     std::vector<LocalBundleAdjustmentPoint> points;
     std::vector<LocalBundleAdjustmentObservation> observations;
@@ -162,15 +155,13 @@ struct LocalBundleAdjustmentProblem
 // Les observations 2D fournies à ce résidu sont déjà UNDISTORTED
 // On utilise donc un modèle pinhole simple, sans k1, k2, p1, p2 ...
 // ------------------------------------------------------------------
-struct BundleAdjustmentReprojectionResidual
-{
+struct BundleAdjustmentReprojectionResidual {
     BundleAdjustmentReprojectionResidual(
         double observedX, double observedY,
         double fx, double fy,
         double cx, double cy) :
         observedX(observedX), observedY(observedY),
-        fx(fx), fy(fy), cx(cx), cy(cy)
-    {
+        fx(fx), fy(fy), cx(cx), cy(cy) {
     }
 
     template <typename T> bool operator()(
@@ -255,8 +246,7 @@ int cullOldNeverConfirmedMapPoints(
     std::vector<MapPointId>& mapPointIds,
 
     std::vector<int>& keyframeMapPointIndices,
-    std::vector<int>& currentMapPointIndices)
-{
+    std::vector<int>& currentMapPointIndices) {
     // ----------------------------------------------------
     // Sécurité: les 3 structures de carte doivent être 
     // prafaitement synchronisées avant toute suppression.
@@ -267,8 +257,7 @@ int cullOldNeverConfirmedMapPoints(
             mapPointQualities.size() ||
         mapPoints.size() !=
             mapPointIds.size()
-        )
-    {
+        ) {
         std::cerr << "Error: inconsistant map before culling.\n";
         return -1;
     }
@@ -295,8 +284,7 @@ int cullOldNeverConfirmedMapPoints(
     int removedPoints = 0;
     int protectedByRecentMatch = 0;
 
-    for (std::size_t oldIndex = 0; oldIndex < oldMapSize; ++oldIndex)
-    {
+    for (std::size_t oldIndex = 0; oldIndex < oldMapSize; ++oldIndex) {
         const MapPointQuality& quality = mapPointQualities[oldIndex];
 
         const int pointAgeFrames = currentFrameIndex - quality.creationFrameIndex;
@@ -318,13 +306,11 @@ int cullOldNeverConfirmedMapPoints(
             neverConfirmed &&
             !recentlyMatched;
 
-        if (oldEnough && neverConfirmed && recentlyMatched)
-        {
+        if (oldEnough && neverConfirmed && recentlyMatched) {
             ++protectedByRecentMatch;
         }
 
-        if (shouldCull)
-        {
+        if (shouldCull) {
             ++removedPoints;
             continue;
         }
@@ -358,18 +344,14 @@ int cullOldNeverConfirmedMapPoints(
     // indices. Il faut donc impérativement les remapper.
     // -------------------------------------------------------------
     auto remapAssociations =
-        [&oldToNew](std::vector<int>& associations)
-    {
-            for (int& mapPointIndex : associations)
-            {
-                if (mapPointIndex < 0)
-                {
+        [&oldToNew](std::vector<int>& associations) {
+            for (int& mapPointIndex : associations) {
+                if (mapPointIndex < 0) {
                     continue;
                 }
 
                 if (mapPointIndex >=
-                    static_cast<int>(oldToNew.size()))
-                {
+                    static_cast<int>(oldToNew.size())) {
                     mapPointIndex = -1;
                     continue;
                 }
@@ -436,8 +418,7 @@ int addNewMapPointsBetweenKeyframes(
     float ratioThreshold,
 
     std::vector<cv::Point3f>& mapPoints,
-    cv::Mat& mapDescriptors)
-{
+    cv::Mat& mapDescriptors) {
     // -----------------------------------------------------------
     // Matching entre ancienne keyframe et nouvelle keyframe
     // 
@@ -460,10 +441,8 @@ int addNewMapPointsBetweenKeyframes(
 
     std::vector<cv::DMatch> candidateMatches;
 
-    for (const auto& candidates : knnMatches)
-    {
-        if (candidates.size() < 2)
-        {
+    for (const auto& candidates : knnMatches) {
+        if (candidates.size() < 2) {
             continue;
         }
 
@@ -471,21 +450,18 @@ int addNewMapPointsBetweenKeyframes(
         const cv::DMatch& second = candidates[1];
 
         // Lowe ratio test
-        if (best.distance >= ratioThreshold * second.distance)
-        {
+        if (best.distance >= ratioThreshold * second.distance) {
             continue;
         }
 
         // Le point de l'ancienne keyframe appartient déjà à la carte:
         // inutile de le trianguler à nouveau
-        if (keyframeMapPointIndices[best.queryIdx] >= 0)
-        {
+        if (keyframeMapPointIndices[best.queryIdx] >= 0) {
             continue;
         }
 
         // Le point courant appartient déjà à la carte.
-        if (currentMapPointIndices[best.trainIdx] >= 0)
-        {
+        if (currentMapPointIndices[best.trainIdx] >= 0) {
             continue;
         }
 
@@ -499,8 +475,7 @@ int addNewMapPointsBetweenKeyframes(
         candidateMatches.begin(),
         candidateMatches.end(),
         [](const cv::DMatch& a,
-            const cv::DMatch& b)
-        {
+            const cv::DMatch& b) {
             return a.distance < b.distance;
         }
     );
@@ -512,10 +487,8 @@ int addNewMapPointsBetweenKeyframes(
 
     std::vector<cv::DMatch> triangulationMatches;
 
-    for (const cv::DMatch& match : candidateMatches)
-    {
-        if (currentKeypointAlreadyUsed[match.trainIdx])
-        {
+    for (const cv::DMatch& match : candidateMatches) {
+        if (currentKeypointAlreadyUsed[match.trainIdx]) {
             continue;
         }
 
@@ -524,8 +497,7 @@ int addNewMapPointsBetweenKeyframes(
         triangulationMatches.push_back(match);
     }
 
-    if (triangulationMatches.size() < 20)
-    {
+    if (triangulationMatches.size() < 20) {
         return 0;    
     }
 
@@ -535,8 +507,7 @@ int addNewMapPointsBetweenKeyframes(
     std::vector<cv::Point2f> pointsKeyframe;
     std::vector<cv::Point2f> pointsCurrent;
 
-    for (const cv::DMatch& match : triangulationMatches)
-    {
+    for (const cv::DMatch& match : triangulationMatches) {
         pointsKeyframe.push_back(
             keyframeKeypoints[match.queryIdx].pt
         );
@@ -690,8 +661,7 @@ int addNewMapPointsBetweenKeyframes(
 
         if (!std::isfinite(pointX) ||
             !std::isfinite(pointY) ||
-            !std::isfinite(pointZ))
-        {
+            !std::isfinite(pointZ)) {
             continue;
         }
 
@@ -709,8 +679,7 @@ int addNewMapPointsBetweenKeyframes(
 
         // Point derrière une caméra
         if (pointKeyframe.at<double>(2, 0) <= 0.0 ||
-            pointCurrent.at<double>(2, 0) <= 0.0)
-        {
+            pointCurrent.at<double>(2, 0) <= 0.0) {
             continue;
         }
         
@@ -742,8 +711,7 @@ int addNewMapPointsBetweenKeyframes(
 
         // Protection contre les cas dégénérés
         if (keyframeRayNorm < 1e-9 ||
-            currentRayNorm < 1e-9)
-        {
+            currentRayNorm < 1e-9) {
             continue;
         }
 
@@ -769,8 +737,7 @@ int addNewMapPointsBetweenKeyframes(
             triangulationAngleDegrees
         );
 
-        if (triangulationAngleDegrees < minimumTriangulationAngleDegrees)
-        {
+        if (triangulationAngleDegrees < minimumTriangulationAngleDegrees) {
             ++rejectedByLowParallax;
             continue;
         }
@@ -809,8 +776,7 @@ int addNewMapPointsBetweenKeyframes(
 
 
         if (errorKeyframe > maximumReprojectionError ||
-            errorCurrent > maximumReprojectionError)
-        {
+            errorCurrent > maximumReprojectionError) {
             continue;
         }
 
@@ -852,8 +818,7 @@ int addNewMapPointsBetweenKeyframes(
               << '\n';
 
 
-    if (!triangulationAngles.empty())
-    {
+    if (!triangulationAngles.empty()) {
         std::sort(
             triangulationAngles.begin(),
             triangulationAngles.end()
@@ -872,20 +837,16 @@ int addNewMapPointsBetweenKeyframes(
         int above050 = 0;
         int above100 = 0;
 
-        for (double angle : triangulationAngles) 
-        {
-            if (angle >= 0.25)
-            {
+        for (double angle : triangulationAngles) {
+            if (angle >= 0.25) {
                 ++above025;
             }
 
-            if (angle >= 0.50)
-            {
+            if (angle >= 0.50) {
                 ++above050;
             }
 
-            if (angle >= 1.00)
-            {
+            if (angle >= 1.00) {
                 ++above100;
             }
         }
@@ -923,11 +884,9 @@ bool createKeyframeRecord(
     const cv::Mat& worldToCameraRotation,
     const cv::Mat& translationVector,
 
-    KeyframeRecord& record)
-{
+    KeyframeRecord& record) {
     // Une association est définie pour chacun des keypoints.
-    if (keypoints.size() != keypointMapPointIndices.size())
-    {
+    if (keypoints.size() != keypointMapPointIndices.size()) {
         std::cerr << "Error: keyframe keypoint/association mismatch.\n";
         return false;
     }
@@ -949,21 +908,18 @@ bool createKeyframeRecord(
 
     for (std::size_t keypointIndex = 0;
         keypointIndex < keypoints.size();
-        ++keypointIndex)
-    {
+        ++keypointIndex) {
         const int mapPointIndex = 
             keypointMapPointIndices[keypointIndex];
 
         // Ce keypoint n'a aucune association 3D.
-        if (mapPointIndex < 0)
-        {
+        if (mapPointIndex < 0) {
             continue;
         }
 
         if (mapPointIndex >=
             static_cast<int>(mapPointIds.size())
-            )
-        {
+            ) {
             std::cerr << "Error: invalid map point index "
                       << "while rerecording keyframe"
                       << " | frame: "
@@ -1012,21 +968,18 @@ bool refreshStoredKeyframeRecord(
     const std::vector<MapPointId>& mapPointIds,
 
     const cv::Mat& worldToCameraRotation,
-    const cv::Mat& translationVector)
-{   
+    const cv::Mat& translationVector) {
     auto keyframeIterator =
         std::find_if(
             keyframeHistory.rbegin(),
             keyframeHistory.rend(),
 
-            [frameIndex](const KeyframeRecord& record)
-            {
+            [frameIndex](const KeyframeRecord& record) {
                 return record.frameIndex == frameIndex;
             }
         );
 
-    if (keyframeIterator == keyframeHistory.rend())
-    {
+    if (keyframeIterator == keyframeHistory.rend()) {
         std::cerr << "Error: mapping anchor frame "
                   << frameIndex
                   << " not found in keyframe history.\n";
@@ -1048,8 +1001,7 @@ bool refreshStoredKeyframeRecord(
         worldToCameraRotation,
         translationVector,
 
-        refreshedRecord))
-    {
+        refreshedRecord)) {
         return false;
     }
 
@@ -1067,10 +1019,8 @@ bool refreshStoredKeyframeRecord(
 void printLocalBundleAdjustmentConnectivity(
     const std::vector<KeyframeRecord>& keyframeHistory,
     const std::vector<MapPointId>& activeMapPointIds,
-    std::size_t windowSize)
-{   
-    if (keyframeHistory.empty())
-    {
+    std::size_t windowSize) {
+    if (keyframeHistory.empty()) {
         return;
     }
 
@@ -1094,20 +1044,17 @@ void printLocalBundleAdjustmentConnectivity(
 
     for (std::size_t keyframeIndex = firstKeyframeIndex;
         keyframeIndex < keyframeHistory.size();
-        ++keyframeIndex)
-    {
+        ++keyframeIndex) {
         const KeyframeRecord& keyframe =
             keyframeHistory[keyframeIndex];
 
-        for (const KeyframeObservation& observation : keyframe.observations)
-        {
+        for (const KeyframeObservation& observation : keyframe.observations) {
             // Une ancienne keyframe peut encore contenir l'ID d'un point qui
             // a depuis été supprimé de la carte.
             // 
             // Ces observations historiques ne peuvent pas participer au Bundle 
             // Adjustment de la carte active.
-            if (!activeMapPointIdSet.contains(observation.mapPointId))
-            {
+            if (!activeMapPointIdSet.contains(observation.mapPointId)) {
                 continue;
             }
             
@@ -1123,8 +1070,7 @@ void printLocalBundleAdjustmentConnectivity(
     int observedAtLeastFourTimes = 0;
     int observedInEveryKeyframe = 0;
 
-    for (const auto& [mapPointId, count] : observationCounts)
-    {
+    for (const auto& [mapPointId, count] : observationCounts) {
         (void)mapPointId;
 
         if (count >= 1) ++observedAtLeastOnce;
@@ -1132,8 +1078,7 @@ void printLocalBundleAdjustmentConnectivity(
         if (count >= 3) ++observedAtLeastThreeTimes;
         if (count >= 4) ++observedAtLeastFourTimes;
         if (count >=
-            static_cast<int>(actualWindowSize))
-        {
+            static_cast<int>(actualWindowSize)) {
             ++observedInEveryKeyframe;
         }
     }
@@ -1144,12 +1089,10 @@ void printLocalBundleAdjustmentConnectivity(
 
     for (std::size_t keyframeIndex = firstKeyframeIndex;
         keyframeIndex < keyframeHistory.size();
-        ++keyframeIndex)
-    {
+        ++keyframeIndex) {
         std::cout << keyframeHistory[keyframeIndex].frameIndex;
 
-        if (keyframeIndex + 1 < keyframeHistory.size())
-        {
+        if (keyframeIndex + 1 < keyframeHistory.size()) {
             std::cout << ",";
         }
     }
@@ -1174,26 +1117,25 @@ bool buildLocalBundleAdjustmentProblem(
     const std::vector<cv::Point3f>& mapPoints,
     const std::vector<MapPointId>& mapPointIds,
 
+    const std::unordered_set<MapPointId>& excludedFromLocalBundleAdjustment,
+
     const cv::Mat& cameraMatrix,
     const cv::Mat& distortionCoefficients,
 
     std::size_t windowSize,
 
-    LocalBundleAdjustmentProblem& problem)
-{
+    LocalBundleAdjustmentProblem& problem) {
     problem = LocalBundleAdjustmentProblem{};
 
     // ---------------------------------------------------------------
     // Vérif de cohérence de la carte active
     // ---------------------------------------------------------------
-    if (mapPoints.size() != mapPointIds.size())
-    {
+    if (mapPoints.size() != mapPointIds.size()) {
         std::cerr << "Error: point/ID mismatch while building local BA\n";
         return false;
     }
 
-    if (keyframeHistory.size() < windowSize)
-    {
+    if (keyframeHistory.size() < windowSize) {
         return true;
     }
 
@@ -1214,8 +1156,7 @@ bool buildLocalBundleAdjustmentProblem(
 
     for (std::size_t mapPointIndex = 0;
         mapPointIndex < mapPointIds.size();
-        ++mapPointIndex)
-    {
+        ++mapPointIndex) {
         const MapPointId mapPointId = mapPointIds[mapPointIndex];
 
         const auto [iterator, inserted] = 
@@ -1226,8 +1167,7 @@ bool buildLocalBundleAdjustmentProblem(
 
         (void)iterator;
 
-        if (!inserted) 
-        {
+        if (!inserted) {
             std::cerr << "Error: duplicate MapPointId "
                       << mapPointId
                       << " in active map.\n";
@@ -1248,8 +1188,7 @@ bool buildLocalBundleAdjustmentProblem(
 
     for (std::size_t historyIndex = firstKeyframeIndex;
         historyIndex < keyframeHistory.size();
-        ++historyIndex)
-    {
+        ++historyIndex) {
         const KeyframeRecord& keyframe = 
             keyframeHistory[historyIndex];
 
@@ -1258,19 +1197,16 @@ bool buildLocalBundleAdjustmentProblem(
         // dupliquée dans une même keyframe
         std::unordered_set<MapPointId> seenInThisKeyframe;
 
-        for (const KeyframeObservation& observation : keyframe.observations)
-        {
-            if (!activeMapPointIndices.contains(
-                observation.mapPointId
-            ))
-            {
+        for (const KeyframeObservation& observation : keyframe.observations) {
+            if (!activeMapPointIndices.contains(observation.mapPointId)) {
                 continue;
             }
 
-            if (!seenInThisKeyframe.insert(
-                observation.mapPointId
-            ).second)
-            {
+            if (excludedFromLocalBundleAdjustment.contains(observation.mapPointId)) {
+                continue;
+            }
+
+            if (!seenInThisKeyframe.insert(observation.mapPointId).second) {
                 continue;
             }
 
@@ -1282,29 +1218,17 @@ bool buildLocalBundleAdjustmentProblem(
     // ------------------------------------------------------------------
     // Construction des 5 poses locales
     // ------------------------------------------------------------------
-    problem.poses.reserve(
-        windowSize
-    );
+    problem.poses.reserve(windowSize);
 
-    for (std::size_t localPoseIndex = 0;
-        localPoseIndex < windowSize;
-        ++localPoseIndex)
-    {
+    for (std::size_t localPoseIndex = 0; localPoseIndex < windowSize; ++localPoseIndex) {
         const KeyframeRecord& keyframe = 
-            keyframeHistory[
-                firstKeyframeIndex + localPoseIndex
-            ];
+            keyframeHistory[firstKeyframeIndex + localPoseIndex];
 
         cv::Mat rotation64;
         cv::Mat translation64;
 
-        keyframe.worldToCameraRotation.convertTo(
-            rotation64, CV_64F
-        );
-
-        keyframe.translationVector.convertTo(
-            translation64, CV_64F
-        );
+        keyframe.worldToCameraRotation.convertTo(rotation64, CV_64F);
+        keyframe.translationVector.convertTo(translation64, CV_64F);
 
 
         // Conversion matrice de rotation -> vecteur angle-axis.
@@ -1312,24 +1236,17 @@ bool buildLocalBundleAdjustmentProblem(
         // OpenCV appelle cette représentation un "rotation vector"
         cv::Mat rotationVector;
 
-        cv::Rodrigues(
-            rotation64, rotationVector
-        );
+        cv::Rodrigues(rotation64, rotationVector);
 
         LocalBundleAdjustmentPose pose;
 
         pose.frameIndex = keyframe.frameIndex;
 
         pose.parameters[0] = rotationVector.at<double>(0, 0);
-
         pose.parameters[1] = rotationVector.at<double>(1, 0);
-
         pose.parameters[2] = rotationVector.at<double>(2, 0);
-
         pose.parameters[3] = translation64.at<double>(0, 0);
-
         pose.parameters[4] = translation64.at<double>(1, 0);
-
         pose.parameters[5] = translation64.at<double>(2, 0);
 
 
@@ -1348,57 +1265,36 @@ bool buildLocalBundleAdjustmentProblem(
     // --------------------------------------------------------------------------
     std::unordered_map<MapPointId, int> localPointIndices;
 
-    for (std::size_t globalPointIndex = 0;
-        globalPointIndex < mapPointIds.size();
-        ++globalPointIndex)
-    {
+    for (std::size_t globalPointIndex = 0; globalPointIndex < mapPointIds.size(); ++globalPointIndex) {
         const MapPointId mapPointId = mapPointIds[globalPointIndex];
-        const auto countIterator = 
-            observationCounts.find(mapPointId);
 
-        if (countIterator == observationCounts.end())
-        {
+        if (excludedFromLocalBundleAdjustment.contains(mapPointId)) {
             continue;
         }
 
-        if (countIterator->second < 2)
-        {
+        const auto countIterator = observationCounts.find(mapPointId);
+
+        if (countIterator == observationCounts.end()) {
+            continue;
+        }
+
+        if (countIterator->second < 2) {
             continue;
         }
 
         LocalBundleAdjustmentPoint point;
 
         point.mapPointId = mapPointId;
-        point.globalMapPointIndex = 
-            static_cast<int>(globalPointIndex);
+        point.globalMapPointIndex = static_cast<int>(globalPointIndex);
 
-        point.position[0] = 
-            static_cast<double>(
-                mapPoints[globalPointIndex].x
-            );
+        point.position[0] = static_cast<double>(mapPoints[globalPointIndex].x);
+        point.position[1] = static_cast<double>(mapPoints[globalPointIndex].y);
+        point.position[2] = static_cast<double>(mapPoints[globalPointIndex].z);
 
-        point.position[1] =
-            static_cast<double>(
-                mapPoints[globalPointIndex].y
-            );
+        const int localPointIndex = static_cast<int>(problem.points.size());
 
-        point.position[2] =
-            static_cast<double>(
-                mapPoints[globalPointIndex].z
-            );
-
-        const int localPointIndex =
-            static_cast<int>(
-                problem.points.size()
-            );
-
-        localPointIndices.emplace(
-            mapPointId, localPointIndex
-        );
-
-        problem.points.push_back(
-            point
-        );
+        localPointIndices.emplace(mapPointId, localPointIndex);
+        problem.points.push_back(point);
     }
 
 
@@ -1407,8 +1303,7 @@ bool buildLocalBundleAdjustmentProblem(
     // ---------------------------------------------------------------------
     for (std::size_t localPoseIndex = 0;
         localPoseIndex < windowSize;
-        ++localPoseIndex)
-    {
+        ++localPoseIndex) {
         const KeyframeRecord& keyframe = 
             keyframeHistory[
                 firstKeyframeIndex + localPoseIndex
@@ -1416,18 +1311,15 @@ bool buildLocalBundleAdjustmentProblem(
 
         std::unordered_set<MapPointId> seenInThisKeyframe;
 
-        for (const KeyframeObservation& observation : keyframe.observations)
-        {
+        for (const KeyframeObservation& observation : keyframe.observations) {
             const auto pointIterator = 
                 localPointIndices.find(observation.mapPointId);
 
-            if (pointIterator == localPointIndices.end())
-            {
+            if (pointIterator == localPointIndices.end()) {
                 continue;
             }
 
-            if (!seenInThisKeyframe.insert(observation.mapPointId).second)
-            {
+            if (!seenInThisKeyframe.insert(observation.mapPointId).second) {
                 continue;
             }
 
@@ -1457,8 +1349,7 @@ bool buildLocalBundleAdjustmentProblem(
                 cameraMatrix
             );
 
-            if (undistortedPoints.size() != 1)
-            {
+            if (undistortedPoints.size() != 1) {
                 std::cerr << "Error: failed to undistort BA observation.\n";
                 return false;
             }
@@ -1483,8 +1374,7 @@ bool buildLocalBundleAdjustmentProblem(
         problem.poses.size(), 0
     );
 
-    for (const LocalBundleAdjustmentObservation& observation : problem.observations)
-    {
+    for (const LocalBundleAdjustmentObservation& observation : problem.observations) {
         ++observationsPerPose[observation.poseIndex];
     }
 
@@ -1499,14 +1389,12 @@ bool buildLocalBundleAdjustmentProblem(
 
     for (std::size_t poseIndex = 0;
         poseIndex < observationsPerPose.size();
-        ++poseIndex)
-    {
+        ++poseIndex) {
         std::cout << problem.poses[poseIndex].frameIndex
                   << ":"
                   << observationsPerPose[poseIndex];
 
-        if (poseIndex + 1 < observationsPerPose.size())
-        {
+        if (poseIndex + 1 < observationsPerPose.size()) {
             std::cout << ",";
         }
     }
@@ -1516,20 +1404,14 @@ bool buildLocalBundleAdjustmentProblem(
     return true;
 }
 
-bool runLocalBundleAdjustment(
-    LocalBundleAdjustmentProblem& localProblem,
-    const cv::Mat& cameraMatrix)
-{
-    if (localProblem.poses.empty() ||
-        localProblem.points.empty() ||
-        localProblem.observations.empty())
-    {
+bool runLocalBundleAdjustment(LocalBundleAdjustmentProblem& localProblem, const cv::Mat& cameraMatrix) {
+
+    if (localProblem.poses.empty() || localProblem.points.empty() || localProblem.observations.empty()) {
         std::cerr << "Error: empty local BA problem.\n";
         return false;
     }
 
-    if (cameraMatrix.rows != 3 || cameraMatrix.cols != 3)
-    {
+    if (cameraMatrix.rows != 3 || cameraMatrix.cols != 3) {
         std::cerr << "Error: invalid camera matrix for local BA.\n";
         return false;
     }
@@ -1538,22 +1420,12 @@ bool runLocalBundleAdjustment(
     // Intrinsèques de la caméra
     // ------------------------------------------------------------
     cv::Mat cameraMatrix64;
+    cameraMatrix.convertTo(cameraMatrix64, CV_64F);
 
-    cameraMatrix.convertTo(
-        cameraMatrix64, CV_64F
-    );
-
-    const double fx = 
-        cameraMatrix64.at<double>(0, 0);
-
-    const double fy =
-        cameraMatrix64.at<double>(1, 1);
-
-    const double cx =
-        cameraMatrix64.at<double>(0, 2);
-
-    const double cy =
-        cameraMatrix64.at<double>(1, 2);
+    const double fx = cameraMatrix64.at<double>(0, 0);
+    const double fy = cameraMatrix64.at<double>(1, 1);
+    const double cx = cameraMatrix64.at<double>(0, 2);
+    const double cy = cameraMatrix64.at<double>(1, 2);
 
 
     // -------------------------------------------------------------
@@ -1568,29 +1440,20 @@ bool runLocalBundleAdjustment(
     // Chaque pose = 6 params:
     //      angle-axis (3) & translation (3)
     // -------------------------------------------------------------
-    for (LocalBundleAdjustmentPose& pose : localProblem.poses)
-    {
-        ceresProblem.AddParameterBlock(
-            pose.parameters.data(), 6
-        );
+    for (LocalBundleAdjustmentPose& pose : localProblem.poses) {
+        ceresProblem.AddParameterBlock(pose.parameters.data(), 6);
 
         // Fixation des deux plus anciennes poses
-        if (pose.fixed)
-        {
-            ceresProblem.SetParameterBlockConstant(
-                pose.parameters.data()
-            );
+        if (pose.fixed) {
+            ceresProblem.SetParameterBlockConstant(pose.parameters.data());
         }
     }
 
     // --------------------------------------------------------------
     // Points 3D
     // --------------------------------------------------------------
-    for (LocalBundleAdjustmentPoint& point : localProblem.points)
-    {
-        ceresProblem.AddParameterBlock(
-            point.position.data(), 3
-        );
+    for (LocalBundleAdjustmentPoint& point : localProblem.points) {
+        ceresProblem.AddParameterBlock(point.position.data(), 3);
     }
 
     // --------------------------------------------------------------
@@ -1601,37 +1464,30 @@ bool runLocalBundleAdjustment(
     // 
     // Delta = 2 px
     // --------------------------------------------------------------
-    ceres::LossFunction* huberLoss =
-        new ceres::HuberLoss(2.0);
+    ceres::LossFunction* huberLoss = new ceres::HuberLoss(2.0);
 
 
     // --------------------------------------------------------------
     // Une observation 2D = un bloc résiduel de dimension 2
     // --------------------------------------------------------------
-    for (const LocalBundleAdjustmentObservation& observation : 
-            localProblem.observations)
-    {
+    std::vector<ceres::ResidualBlockId> residualBlockIds;
+    residualBlockIds.reserve(localProblem.observations.size());
+
+    for (const LocalBundleAdjustmentObservation& observation : localProblem.observations) {
         if (observation.poseIndex < 0 ||
-            observation.poseIndex >=
-            static_cast<int>(localProblem.poses.size()) ||
+            observation.poseIndex >= static_cast<int>(localProblem.poses.size()) ||
             observation.pointIndex < 0 ||
-            observation.pointIndex >=
-            static_cast<int>(localProblem.points.size()))
-        {
+            observation.pointIndex >= static_cast<int>(localProblem.points.size())) {
+
             std::cerr << "Error: invalid local BA observation index.\n";
             return false;
         }
 
-        LocalBundleAdjustmentPose& pose =
-            localProblem.poses[observation.poseIndex];
-
-        LocalBundleAdjustmentPoint& point =
-            localProblem.points[observation.pointIndex];
+        LocalBundleAdjustmentPose& pose = localProblem.poses[observation.poseIndex];
+        LocalBundleAdjustmentPoint& point = localProblem.points[observation.pointIndex];
 
         ceres::CostFunction* costFunction =
-            new ceres::AutoDiffCostFunction<
-                BundleAdjustmentReprojectionResidual, 2, 6, 3
-            >(
+            new ceres::AutoDiffCostFunction<BundleAdjustmentReprojectionResidual, 2, 6, 3>(
                 new BundleAdjustmentReprojectionResidual(
                     observation.imagePoint.x, observation.imagePoint.y,
                     fx, fy,
@@ -1639,12 +1495,12 @@ bool runLocalBundleAdjustment(
                 )
             );
 
-        ceresProblem.AddResidualBlock(
-            costFunction,
-            huberLoss,
-            pose.parameters.data(),
-            point.position.data()
-        );
+        const ceres::ResidualBlockId residualBlockId = 
+            ceresProblem.AddResidualBlock(
+                costFunction, huberLoss, pose.parameters.data(), point.position.data()
+            );
+
+        residualBlockIds.push_back(residualBlockId);
     }
 
     // ---------------------------------------------------------------
@@ -1663,12 +1519,9 @@ bool runLocalBundleAdjustment(
     double initialRawCost = 0.0;
 
     if (!ceresProblem.Evaluate(
-        evaluateOptions,
-        &initialRawCost,
-        nullptr,
-        nullptr,
-        nullptr))
-    {
+            evaluateOptions, &initialRawCost,
+            nullptr, nullptr, nullptr)
+       ) {
         std::cerr << "Error: could not evaluate local BA before solving.\n";
         return false;
     }
@@ -1676,10 +1529,131 @@ bool runLocalBundleAdjustment(
 
     const double initialRmse =
         std::sqrt(
-            2.0 * initialRawCost /
-            static_cast<double>(localProblem.observations.size())
+            2.0 * initialRawCost / static_cast<double>(localProblem.observations.size())
         );
 
+    if (residualBlockIds.size() != localProblem.observations.size()) {
+        std::cerr << "Error: residual block / observation mismatch"
+                  << " | residual blocks: "
+                  << residualBlockIds.size()
+                  << " | observations: "
+                  << localProblem.observations.size()
+                  << '\n';
+
+        return false;
+    }
+
+    auto printPerPoseReprojectionDiagnostics = [&](const char* label) {
+        
+        std::vector<double> squaredErrorSum(localProblem.poses.size(), 0.0);
+        std::vector<double> maximumError(localProblem.poses.size(), 0.0);
+
+        std::vector<int> observationCount(localProblem.poses.size(), 0);
+        std::vector<int> above2Pixels(localProblem.poses.size(), 0);
+        std::vector<int> above5Pixels(localProblem.poses.size(), 0);
+        std::vector<int> above10Pixels(localProblem.poses.size(), 0);
+
+        for (std::size_t observationIndex = 0;
+             observationIndex < localProblem.observations.size();
+             ++observationIndex) {
+
+            double residualCost = 0.0;
+            double residuals[2] = {0.0, 0.0};
+
+            const bool evaluationSucceeded = ceresProblem.EvaluateResidualBlock(
+                residualBlockIds[observationIndex], false, &residualCost, residuals, nullptr
+            );
+
+            if (!evaluationSucceeded) {
+                continue;
+            }
+
+            const double error = 
+                std::sqrt(residuals[0]*residuals[0] + residuals[1]*residuals[1]);
+
+            if (!std::isfinite(error)) {
+                continue;
+            }
+
+            const int poseIndex = localProblem.observations[observationIndex].poseIndex;
+            
+            if (poseIndex < 0 || poseIndex >= static_cast<int>(localProblem.poses.size())) {
+                continue;
+            }
+
+
+            squaredErrorSum[poseIndex] += error * error;
+            maximumError[poseIndex] = 
+                std::max(maximumError[poseIndex], error);
+            ++observationCount[poseIndex];
+
+            if (error >= 2.0) {
+                ++above2Pixels[poseIndex];
+            }
+
+            if (error >= 5.0) {
+                ++above5Pixels[poseIndex];
+            }
+
+            if (error >= 10.0) {
+                ++above10Pixels[poseIndex];
+            }
+        }
+
+        for (std::size_t poseIndex = 0; poseIndex < localProblem.poses.size(); ++poseIndex) {
+
+            const int count = observationCount[poseIndex];
+            const double rmse = 
+                count > 0 ? std::sqrt(squaredErrorSum[poseIndex] / static_cast<double>(count)) : 0.0;
+
+            std::cout << "[LOCAL BA PER-POSE " 
+                      << label
+                      << "] frame: "
+                      << localProblem.poses[poseIndex].frameIndex
+                      << " | fixed: "
+                      << (localProblem.poses[poseIndex].fixed ? "yes" : "no")
+                      << " | observations: "
+                      << count
+                      << " | RMSE: "
+                      << rmse
+                      << " px"
+                      << " | max: "
+                      << maximumError[poseIndex]
+                      << " px"
+                      << " | >= 2px: "
+                      << above2Pixels[poseIndex]
+                      << " | >= 5px: "
+                      << above5Pixels[poseIndex]
+                      << " | >= 10px: "
+                      << above10Pixels[poseIndex]
+                      << '\n';
+        }
+    };
+
+    printPerPoseReprojectionDiagnostics("BEFORE");
+
+
+    // ---------------------------------------------------------------
+    // Sauvegarde de l'état initial
+    // 
+    // Pour l'instant, le BA travailletoujours sur une copie locale.
+    // On conserve ici les paraètres initiaux afin de mesurer
+    // précisément les corrections produites par Ceres.
+    // ---------------------------------------------------------------
+    std::vector<std::array<double, 6>> initialPoseParameters;
+    initialPoseParameters.reserve(localProblem.poses.size());
+
+    for (const LocalBundleAdjustmentPose& pose : localProblem.poses) {
+        initialPoseParameters.push_back(pose.parameters);
+    };
+
+
+    std::vector<std::array<double, 3>> initialPointPositions;
+    initialPointPositions.reserve(localProblem.points.size());
+
+    for (const LocalBundleAdjustmentPoint& point : localProblem.points) {
+        initialPointPositions.push_back(point.position);
+    };
 
     // ---------------------------------------------------------------
     // Configuration du solveur
@@ -1689,21 +1663,15 @@ bool runLocalBundleAdjustment(
     // ---------------------------------------------------------------
     ceres::Solver::Options options;
 
-    options.linear_solver_type =
-        ceres::DENSE_SCHUR;
-
+    options.linear_solver_type = ceres::DENSE_SCHUR;
     options.max_num_iterations = 30;
-
     options.num_threads = 1;
 
     // ---------------------------------------------------------------
     // Optimisation
     // ---------------------------------------------------------------
     ceres::Solver::Summary summary;
-
-    ceres::Solve(
-        options, &ceresProblem, &summary
-    );
+    ceres::Solve(options, &ceresProblem, &summary);
 
     // ---------------------------------------------------------------
     // Mesure APRES optimisation
@@ -1711,18 +1679,257 @@ bool runLocalBundleAdjustment(
     double finalRawCost = 0.0;
 
     if (!ceresProblem.Evaluate(
-        evaluateOptions, &finalRawCost,
-        nullptr, nullptr, nullptr))
-    {
+            evaluateOptions, &finalRawCost,
+            nullptr, nullptr, nullptr)
+       ) {
         std::cerr << "Error: could not evaluate local BA after solving.\n";
         return false;
     }
 
     const double finalRmse =
         std::sqrt(
-            2.0 * finalRawCost /
-            static_cast<double>(localProblem.observations.size())
+            2.0 * finalRawCost / static_cast<double>(localProblem.observations.size())
         );
+
+    printPerPoseReprojectionDiagnostics("AFTER");
+
+    // ---------------------------------------------------------------
+    // Diagnostic des corrections produites par Ceres
+    // 
+    // Ce bloc mesure les corrections produites par Ceres avant leur
+    // éventuelle réinjection dans l'état global.
+    // ---------------------------------------------------------------
+    bool optimizedStateIsFinite = true;
+
+    // 1. Déplacement des poses
+    for (std::size_t poseIndex = 0; poseIndex < localProblem.poses.size(); ++poseIndex) {
+
+         const std::array<double, 6>& before = initialPoseParameters[poseIndex];
+         const std::array<double, 6>& after = localProblem.poses[poseIndex].parameters;
+
+         for (double value : after) {
+             if (!std::isfinite(value)) {
+                 optimizedStateIsFinite = false;
+             }
+         }
+
+         // Rotation avant optimisation
+         cv::Mat rotationVectorBefore =
+            (cv::Mat_<double>(3, 1)
+                << before[0], before[1], before[2]);
+         
+         cv::Mat rotationBefore;
+         cv::Rodrigues(rotationVectorBefore, rotationBefore);
+
+         // Translation avant optimisation
+         cv::Mat translationBefore =
+            (cv::Mat_<double>(3, 1)
+                << before[3], before[4], before[5]);
+
+         // Centre caméra monde avant: Cw = -Rcw^T * tcw
+         const cv::Mat cameraCenterBefore = -rotationBefore.t() * translationBefore;
+
+
+         // Rotation après optimisation
+         cv::Mat rotationVectorAfter =
+             (cv::Mat_<double>(3, 1)
+                 << after[0], after[1], after[2]);
+
+         cv::Mat rotationAfter;
+         cv::Rodrigues(rotationVectorAfter, rotationAfter);
+
+         // Translation après optimisation
+         cv::Mat translationAfter =
+             (cv::Mat_<double>(3, 1)
+                 << after[3], after[4], after[5]);
+
+         // Centre caméra monde après
+         const cv::Mat cameraCenterAfter = -rotationAfter.t() * translationAfter;
+
+
+        // -----------------------------------------------------------
+        // Correction de position caméra
+        // -----------------------------------------------------------
+        const double centerDisplacement =
+            cv::norm(cameraCenterAfter - cameraCenterBefore);
+
+        // -----------------------------------------------------------
+        // Correction angulaire
+        // 
+        // Rotation relative entre avant et après
+        // -----------------------------------------------------------
+        const cv::Mat relativeRotation =
+            rotationAfter * rotationBefore.t();
+
+        cv::Mat relativeRotationVector;
+        cv::Rodrigues(relativeRotation, relativeRotationVector);
+
+        const double rotationCorrectionDegrees = 
+            cv::norm(relativeRotationVector) * 180.0 / CV_PI;
+
+        std::cout << "[LOCAL BA POSE DELTA] frame: "
+                  << localProblem.poses[poseIndex].frameIndex
+                  << " | fixed: "
+                  << (localProblem.poses[poseIndex].fixed ? "yes" : "no")
+                  << " | rotation: "
+                  << rotationCorrectionDegrees
+                  << " deg"
+                  << " | center displacement: "
+                  << centerDisplacement
+                  << " arbitrary units"
+                  << '\n';
+    }
+
+    // 2. Déplacement des points 3D
+    std::vector<double> pointDisplacements;
+
+    pointDisplacements.reserve(
+        localProblem.points.size()
+    );
+
+    for (std::size_t pointIndex = 0; 
+         pointIndex < localProblem.points.size(); 
+         ++pointIndex) {
+         const std::array<double, 3>& before =
+             initialPointPositions[pointIndex];
+
+         const std::array<double, 3>& after =
+             localProblem.points[pointIndex].position;
+
+         if (!std::isfinite(after[0]) ||
+             !std::isfinite(after[1]) ||
+             !std::isfinite(after[2])) {
+             optimizedStateIsFinite = false;
+             continue;
+         }
+
+         const double dx = after[0] - before[0];
+         const double dy = after[1] - before[1];
+         const double dz = after[2] - before[2];
+
+         const double displacement = 
+            std::sqrt(dx*dx + dy*dy + dz*dz);
+
+         pointDisplacements.push_back(
+             displacement
+        );  
+    }
+
+    std::sort(
+        pointDisplacements.begin(), pointDisplacements.end()
+    );
+
+    double medianPointDisplacement = 0.0;
+    double p90PointDisplacement = 0.0;
+    double maximumPointDisplacement = 0.0;
+
+    if (!pointDisplacements.empty()) {
+        medianPointDisplacement = pointDisplacements[pointDisplacements.size() / 2];
+
+        const std::size_t p90Index =
+            static_cast<std::size_t>(
+                0.90 * static_cast<double>(pointDisplacements.size() - 1)
+            );
+
+        p90PointDisplacement = pointDisplacements[p90Index];
+        maximumPointDisplacement = pointDisplacements.back();
+    }
+
+    const double maximumAcceptedPointDisplacement =
+        std::max(
+            1.0, 3.0 * p90PointDisplacement
+        );
+
+    std::size_t acceptedPointUpdates = 0;
+    std::size_t rejectedPointUpdates = 0;
+
+    for (std::size_t pointIndex = 0; pointIndex < localProblem.points.size(); ++pointIndex) {
+        const std::array<double, 3>& before =
+            initialPointPositions[pointIndex];
+
+        const std::array<double, 3>& after =
+            localProblem.points[pointIndex].position;
+
+        const double dx = after[0] - before[0];
+        const double dy = after[1] - before[1];
+        const double dz = after[2] - before[2];
+
+        const double displacement = 
+            std::sqrt(dx*dx + dy*dy + dz*dz);
+
+        if (std::isfinite(displacement) && displacement <= maximumAcceptedPointDisplacement) {
+            ++acceptedPointUpdates;
+        }
+        else {
+            ++rejectedPointUpdates;
+        }
+    }
+
+    std::cout << "[LOCAL BA UPDATE CANDIDATES] accepted points: "
+              << acceptedPointUpdates
+              << "/"
+              << localProblem.points.size()
+              << " | rejected points: "
+              << rejectedPointUpdates
+              << " | displacement threshold: "
+              << maximumAcceptedPointDisplacement
+              << '\n';
+
+
+    std::cout << "[LOCAL BA POINT DELTA] median: "
+              << medianPointDisplacement
+              << " | p90: "
+              << p90PointDisplacement
+              << " | max: "
+              << maximumPointDisplacement
+              << " arbitrary units"
+              << '\n';
+
+    // 3. Vérif de la profondeur après optimisation
+    // 
+    // Un BA peut mathématiquement réduire un coût tout en produisant 
+    // une géométrie physiquement absurde.
+    // On vérifie donc que les points restent devant les caméras qui 
+    // les observent.
+    std::size_t invalidDepthObservations = 0;
+
+    for (const LocalBundleAdjustmentObservation& observation : 
+            localProblem.observations) {
+
+        const LocalBundleAdjustmentPose& pose =
+            localProblem.poses[observation.poseIndex];
+
+        const LocalBundleAdjustmentPoint& point =
+            localProblem.points[observation.pointIndex];
+
+        double pointCamera[3];
+
+        ceres::AngleAxisRotatePoint(
+            pose.parameters.data(),
+            point.position.data(),
+            pointCamera
+        );
+
+
+        pointCamera[0] += pose.parameters[3];
+        pointCamera[1] += pose.parameters[4];
+        pointCamera[2] += pose.parameters[5];
+
+        if (!std::isfinite(pointCamera[0]) ||
+            !std::isfinite(pointCamera[1]) ||
+            !std::isfinite(pointCamera[2]) ||
+            pointCamera[2] <= 1e-6) {
+            ++invalidDepthObservations;
+        }
+    }
+
+    std::cout << "[LOCAL BA SAFETY] finite: "
+              << (optimizedStateIsFinite ? "yes" : "no")
+              << " | invalid depth observations: "
+              << invalidDepthObservations
+              << "/"
+              << localProblem.observations.size()
+              << '\n';
 
     // ---------------------------------------------------------------
     // Diagnostic
@@ -1748,8 +1955,533 @@ bool runLocalBundleAdjustment(
 }
 
 
-int main(int argc, char* argv[])
-{
+bool applyLocalBundleAdjustmentResults(
+    const LocalBundleAdjustmentProblem& localProblem,
+
+    std::vector<cv::Point3f>& mapPoints,
+    const std::vector<MapPointId>& mapPointIds,
+
+    std::unordered_set<MapPointId>& excludedFromLocalBundleAdjustment,
+
+    std::vector<KeyframeRecord>& keyframeHistory,
+
+    int currentFrameIndex,
+    cv::Mat& worldToCameraRotation,
+    cv::Mat& translationVector,
+    cv::Mat& worldFromCameraRotation,
+    cv::Mat& cameraPositionWorld,
+
+    int mappingAnchorFrameIndex,
+    cv::Mat& keyframeWorldToCameraRotation,
+    cv::Mat& keyframeTranslationVector,
+    
+    double maximumAllowedPoseCenterCorrection) {
+
+    // -------------------------------------------------------------------
+    // 1. Vérif des poses optimisées
+    // -------------------------------------------------------------------
+    for (const LocalBundleAdjustmentPose& pose : localProblem.poses) {
+        for (double value : pose.parameters) {
+            if (!std::isfinite(value)) {
+                std::cerr << "Error: non-finite pose produced by local BA.\n";
+                return false;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Validation géométrique des corrections de pose AVANT write-back
+    // 
+    // Une solution Ceres peut être numériquement valide tout en déplaçant 
+    // excessivement une pose par rapport à l'état VO courant.
+    // Dans ce cas, on rejette tout le write-back de cette fenêtre.
+    // -------------------------------------------------------------------
+    const double maximumAcceptedRotationCorrectionDegrees = 2.0;
+
+    double maximumRotationCorrectionDegrees = 0.0;
+    double currentPoseCenterCorrection = 0.0;
+
+    bool currentPoseFound = false;
+
+    std::vector<cv::Mat> cameraCentersBefore;
+    cameraCentersBefore.reserve(localProblem.poses.size());
+
+    for (const LocalBundleAdjustmentPose& localPose : localProblem.poses) {
+        const auto historyIterator =
+            std::find_if(
+                keyframeHistory.begin(), keyframeHistory.end(),
+                [&localPose](const KeyframeRecord& record) {
+                    return record.frameIndex == localPose.frameIndex;
+                }
+            );
+
+        if (historyIterator == keyframeHistory.end()) {
+            std::cerr << "Error: BA pose not found in keyframe history"
+                      << " | frame: "
+                      << localPose.frameIndex
+                      << '\n';
+
+            return false;
+        }
+
+        cv::Mat rotationBefore;
+        cv::Mat translationBefore;
+
+        historyIterator->worldToCameraRotation.convertTo(
+            rotationBefore, CV_64F
+        );
+
+        historyIterator->translationVector.convertTo(
+            translationBefore, CV_64F
+        );
+
+        cv::Mat rotationVectorAfter =
+            (cv::Mat_<double>(3, 1)
+                << localPose.parameters[0], localPose.parameters[1], localPose.parameters[2]);
+
+        cv::Mat rotationAfter;
+        cv::Rodrigues(
+            rotationVectorAfter, rotationAfter
+        );
+
+        cv::Mat translationAfter =
+            (cv::Mat_<double>(3, 1)
+                << localPose.parameters[3], localPose.parameters[4], localPose.parameters[5]);
+        
+        const cv::Mat cameraCenterBefore = -rotationBefore.t() * translationBefore;
+        const cv::Mat cameraCenterAfter = -rotationAfter.t() * translationAfter;
+
+        cameraCentersBefore.push_back(cameraCenterBefore.clone());
+
+        const double centerCorrection = 
+            cv::norm(cameraCenterAfter - cameraCenterBefore);
+
+        const cv::Mat relativeRotation = 
+            rotationAfter * rotationBefore.t();
+
+        cv::Mat relativeRotationVector;
+        cv::Rodrigues(
+            relativeRotation, relativeRotationVector
+        );
+
+        const double rotationCorrectionDegrees =
+            cv::norm(relativeRotationVector) * 180.0 / CV_PI;
+
+        if (!localPose.fixed) {
+            maximumRotationCorrectionDegrees = 
+                std::max(
+                    maximumRotationCorrectionDegrees, rotationCorrectionDegrees
+                );
+        }
+
+        if (localPose.frameIndex == currentFrameIndex) {
+            currentPoseCenterCorrection = centerCorrection;
+            currentPoseFound = true;
+        }
+    }
+
+
+    if (!currentPoseFound) {
+        std::cerr << "Error: current keyframe not found in localBA window.\n";
+        return false;
+    }
+
+    const bool excessiveRotation =
+        maximumRotationCorrectionDegrees > maximumAcceptedRotationCorrectionDegrees;
+
+    const bool excessiveCurrentPoseCorrection =
+        std::isfinite(maximumAllowedPoseCenterCorrection) &&
+        currentPoseCenterCorrection > maximumAllowedPoseCenterCorrection;
+
+    // -------------------------------------------------------------------
+    // 2. Calcul des déplacements des points 3D
+    // 
+    // mapPoints contient encore ici les positions AVANT BA.
+    // localProblem.Points contient celles APRÈS BA.
+    // -------------------------------------------------------------------
+    std::vector<double> pointDisplacements;
+    std::vector<double> relativePointDisplacements;
+    std::vector<double> relativePointDisplacementByPoint(
+        localProblem.points.size(), std::numeric_limits<double>::quiet_NaN()
+    );
+
+    pointDisplacements.reserve(
+        localProblem.points.size()
+    );
+
+    relativePointDisplacements.reserve(
+        localProblem.points.size()
+    );
+
+    for (std::size_t localPointIndex = 0;
+         localPointIndex < localProblem.points.size();
+         ++localPointIndex) {
+
+        const LocalBundleAdjustmentPoint& localPoint = localProblem.points[localPointIndex];
+        const int globalIndex = 
+            localPoint.globalMapPointIndex;
+
+        if (globalIndex < 0 ||
+            globalIndex >= static_cast<int>(mapPoints.size()) ||
+            globalIndex >= static_cast<int>(mapPointIds.size())) {
+
+            std::cerr << "Error: invalid global map point indexduring BA write-back.\n";
+            return false;
+        }
+
+        if (mapPointIds[globalIndex] != localPoint.mapPointId) {
+            std::cerr << "Error: map point ID mismatch during BA write-back.\n";
+            return false;
+        }
+
+        const cv::Point3f& before = mapPoints[globalIndex];
+        const std::array<double, 3>& after = localPoint.position;
+
+        if (!std::isfinite(after[0]) ||
+            !std::isfinite(after[1]) ||
+            !std::isfinite(after[2])) {
+
+            continue;
+        }
+
+        const double dx = after[0] - static_cast<double>(before.x);
+        const double dy = after[1] - static_cast<double>(before.y);
+        const double dz = after[2] - static_cast<double>(before.z);
+
+        const double displacement = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+        pointDisplacements.push_back(displacement);
+
+        // Diagnostic du déplacement relatif.
+        //
+        // Pour rendre la mesure indépendante de l'échelle monoculaire,
+        // on rapporte le déplacement du point à sa distance à la caméra
+        // observante la plus proche avant le BA.
+        // 
+        // ratio = ||X_après - X_avant|| / ||X_avant - C||
+        // 
+        // Exemple: 
+        //      0.10 -> déplacement de 10% de la distance caméra-point
+        //      0.5 -> 50 %
+        //      1.00 -> 100 %
+        const cv::Mat pointBefore = 
+            (cv::Mat_<double>(3, 1)
+                << static_cast<double>(before.x),
+                   static_cast<double>(before.y),
+                   static_cast<double>(before.z));
+
+        double minimumObservationDistance = std::numeric_limits<double>::infinity();
+
+        for (const LocalBundleAdjustmentObservation& observation : localProblem.observations) {
+            if (observation.pointIndex != static_cast<int>(localPointIndex)) {
+                continue;
+            }
+
+            if (observation.poseIndex < 0 || observation.poseIndex >= static_cast<int>(cameraCentersBefore.size())) {
+                continue;
+            }
+
+            const double observationDistance = 
+                cv::norm(pointBefore - cameraCentersBefore[observation.poseIndex]);
+
+            if (std::isfinite(observationDistance) && observationDistance > 1e-9) {
+                minimumObservationDistance = 
+                    std::min(minimumObservationDistance, observationDistance);
+            }
+        }
+
+        if (std::isfinite(minimumObservationDistance) && minimumObservationDistance > 1e-9) {
+            const double relativeDisplacement = displacement / minimumObservationDistance;
+
+            if (std::isfinite(relativeDisplacement)) {
+                relativePointDisplacementByPoint[localPointIndex] = relativeDisplacement;
+                relativePointDisplacements.push_back(relativeDisplacement);
+            }
+        }
+    }
+
+    if (relativePointDisplacements.size() != localProblem.points.size()) {
+        std::cerr << "Error: missing relative displacement "
+                  << "for some BA points"
+                  << " | relative samples : "
+                  << relativePointDisplacements.size()
+                  << " | BA points: "
+                  << localProblem.points.size()
+                  << '\n';
+    }
+
+    std::sort(relativePointDisplacements.begin(), relativePointDisplacements.end());
+
+    double medianRelativePointDisplacement = 0.0;
+    double p90RelativePointDisplacement = 0.0;
+    double maximumRelativePointDisplacement = 0.0;
+
+    if (!relativePointDisplacements.empty()) {
+        medianRelativePointDisplacement = relativePointDisplacements[relativePointDisplacements.size() / 2];
+
+        const std::size_t relativeP90Index =
+            static_cast<std::size_t>(
+                0.90 * static_cast<double>(relativePointDisplacements.size() - 1)
+                );
+
+        p90RelativePointDisplacement = relativePointDisplacements[relativeP90Index];
+        maximumRelativePointDisplacement = relativePointDisplacements.back();
+    }
+
+    std::size_t relativeAbove10Percent = 0;
+    std::size_t relativeAbove25Percent = 0;
+    std::size_t relativeAbove50Percent = 0;
+    std::size_t relativeAbove100Percent = 0;
+
+    for (double relativeDisplacement : relativePointDisplacements) {
+        if (relativeDisplacement >= 0.10) {
+            ++relativeAbove10Percent;
+        }
+
+        if (relativeDisplacement >= 0.25) {
+            ++relativeAbove25Percent;
+        }
+
+        if (relativeDisplacement >= 0.50) {
+            ++relativeAbove50Percent;
+        }
+
+        if (relativeDisplacement >= 1.00) {
+            ++relativeAbove100Percent;
+        }
+    }
+
+    std::cout << "[LOCAL BA RELATIVE POINT DELTA] median: "
+              << medianRelativePointDisplacement
+              << " | p90: "
+              << p90RelativePointDisplacement
+              << " | maximum: "
+              << maximumRelativePointDisplacement
+              << " | samples: "
+              << relativePointDisplacements.size()
+              << '\n';
+
+    std::cout << "[LOCAL BA RELATIVE POINT COUNTS] >= 10%: "
+              << relativeAbove10Percent
+              << " | >= 25%: "
+              << relativeAbove25Percent
+              << " | >= 50%: "
+              << relativeAbove50Percent
+              << " | >= 100%: "
+              << relativeAbove100Percent
+              << '\n';
+
+    const double maximumAcceptedRelativePointDisplacement = 0.50;
+    const double maximumAcceptedBadRelativePointRatio = 0.25;
+    const double badRelativePointRatio = 
+        relativePointDisplacements.empty() ? 1.0 : static_cast<double>(relativeAbove50Percent) / static_cast<double>(relativePointDisplacements.size());
+
+    const bool excessiveRelativePointContamination = badRelativePointRatio > maximumAcceptedBadRelativePointRatio;
+
+    std::cout << "[LOCAL BA RELATIVE WINDOW] points >= 50%: "
+              << relativeAbove50Percent
+              << "/"
+              << relativePointDisplacements.size()
+              << " | ratio: "
+              << badRelativePointRatio
+              << " | allowed ratio: "
+              << maximumAcceptedBadRelativePointRatio
+              << '\n';
+
+    if (excessiveRelativePointContamination) {
+        std::cout << "[LOCAL BA WRITEBACK SKIP]"
+                  << " relative point contamination"
+                  << " | points >= 50%: "
+                  << relativeAbove50Percent
+                  << "/"
+                  << relativePointDisplacements.size()
+                  << " | ratio: "
+                  << badRelativePointRatio
+                  << " | allowed: "
+                  << maximumAcceptedBadRelativePointRatio
+                  << '\n';
+
+        return true;
+    }
+
+    if (excessiveRotation || excessiveCurrentPoseCorrection) {
+        std::cout << "[LOCAL BA WRITEBACK SKIP] max rotation correction: "
+                  << maximumRotationCorrectionDegrees
+                  << " deg"
+                  << " | current center correction: "
+                  << currentPoseCenterCorrection
+                  << " | allowed center correction: "
+                  << maximumAllowedPoseCenterCorrection
+                  << '\n';
+
+        return true;
+    }
+
+    if (pointDisplacements.empty()) {
+        std::cerr << "Error: no finite map point available for BA write-back.\n";
+        return false;
+    }
+
+    std::sort(pointDisplacements.begin(), pointDisplacements.end());
+
+    const std::size_t p90Index = 
+        static_cast<std::size_t>(0.90 * static_cast<double>(pointDisplacements.size() - 1));
+
+    const double p90PointDisplacement = pointDisplacements[p90Index];
+
+    const double maximumAcceptedPointDisplacement =
+        std::max(1.0, 3.0 * p90PointDisplacement);
+
+    // -------------------------------------------------------------------
+    // 3. Réinjection des points 3D
+    // 
+    // Un point qui a énormément dérivé pendant le BA est conservé à son 
+    // ancienne position.
+    // -------------------------------------------------------------------
+    std::size_t updatedPoints = 0;
+    std::size_t rejectedPoints = 0;
+
+    for (std::size_t localPointIndex = 0;
+         localPointIndex < localProblem.points.size();
+         ++localPointIndex) {
+
+        const LocalBundleAdjustmentPoint& localPoint = localProblem.points[localPointIndex];
+
+        const int globalIndex = localPoint.globalMapPointIndex;
+
+        const cv::Point3f& before = mapPoints[globalIndex];
+        const std::array<double, 3>& after = localPoint.position;
+
+        const double dx = after[0] - static_cast<double>(before.x);
+        const double dy = after[1] - static_cast<double>(before.y);
+        const double dz = after[2] - static_cast<double>(before.z);
+
+        const double displacement = std::sqrt(dx*dx + dy*dy + dz*dz);
+        const double relativeDisplacement = relativePointDisplacementByPoint[localPointIndex];
+
+        const bool invalidPointUpdate = 
+            !std::isfinite(displacement) || !std::isfinite(relativeDisplacement);
+
+        const bool excessiveAbsoluteDisplacement = displacement > maximumAcceptedPointDisplacement;
+        const bool excessiveRelativeDisplacement = relativeDisplacement > maximumAcceptedRelativePointDisplacement;
+
+        if (invalidPointUpdate || excessiveAbsoluteDisplacement || excessiveRelativeDisplacement) {
+            // Exclusion permanente du BA uniquement si la correction est invalide ou relativement disproportionnée
+            if (invalidPointUpdate || excessiveRelativeDisplacement) {
+                excludedFromLocalBundleAdjustment.insert(localPoint.mapPointId);
+            }
+
+            // Dans tous les cas de rejet, on NE réinjecte PAS la position optimisée dans la carte
+            ++rejectedPoints;
+            continue;
+        }
+
+        mapPoints[globalIndex] =
+            cv::Point3f(
+                static_cast<float>(after[0]),
+                static_cast<float>(after[1]),
+                static_cast<float>(after[2])
+            );
+
+        ++updatedPoints;
+    }
+
+    // -------------------------------------------------------------------
+    // 4. Réinjection des poses des keyframes
+    // -------------------------------------------------------------------
+    bool currentPoseUpdated = false;
+    bool mappingAnchorUpdated = false;
+
+    for (const LocalBundleAdjustmentPose& localPose : localProblem.poses) {
+        cv::Mat rotationVector =
+            (cv::Mat_<double>(3, 1)
+                << localPose.parameters[0],
+                   localPose.parameters[1],
+                   localPose.parameters[2]);
+
+        cv::Mat optimizedRotation;
+        cv::Rodrigues(
+            rotationVector, optimizedRotation
+        );
+
+        cv::Mat optimizedTranslation =
+            (cv::Mat_<double>(3, 1)
+                << localPose.parameters[3],
+                   localPose.parameters[4],
+                   localPose.parameters[5]);
+
+        // ---------------------------------------------------------------
+        // Mise à jour de la pose stockée dans l'historique
+        // ---------------------------------------------------------------
+        auto historyIterator =
+            std::find_if(
+                keyframeHistory.begin(),keyframeHistory.end(),
+                [&localPose](const KeyframeRecord& record) {
+                    return record.frameIndex == localPose.frameIndex;
+                }
+            );
+
+        if (historyIterator == keyframeHistory.end()) {
+            std::cerr << "Error: optimized keyframe not found in history"
+                      << " | frame: "
+                      << localPose.frameIndex
+                      << '\n';
+
+            return false;
+        }
+
+        historyIterator->worldToCameraRotation = optimizedRotation.clone();
+        historyIterator->translationVector = optimizedTranslation.clone();
+
+        // ----------------------------------------------------------------
+        // La frame actuellement traitée peut elle-même avoir été optimisée
+        // par le BA.
+        // ----------------------------------------------------------------
+        if (localPose.frameIndex == currentFrameIndex) {
+            worldToCameraRotation = optimizedRotation.clone();
+            translationVector = optimizedTranslation.clone();
+
+            worldFromCameraRotation =
+                worldToCameraRotation.t();
+
+            cameraPositionWorld =
+                -worldToCameraRotation.t() * translationVector;
+
+            currentPoseUpdated = true;
+        }
+
+
+        // ----------------------------------------------------------------
+        // L'ancre de triangulation peut également appartenir à la 
+        // fenêtre locale.
+        // ----------------------------------------------------------------
+        if (localPose.frameIndex == mappingAnchorFrameIndex) {
+            keyframeWorldToCameraRotation = optimizedRotation.clone();
+            keyframeTranslationVector = optimizedTranslation.clone();
+
+
+            mappingAnchorUpdated = true;
+        }
+    }
+
+    std::cout << "[LOCAL BA WRITEBACK] updated points: "
+              << updatedPoints
+              << "/"
+              << localProblem.points.size()
+              << " | rejected points: "
+              << rejectedPoints
+              << " | threshold: "
+              << maximumAcceptedPointDisplacement
+              << " | current pose: "
+              << (currentPoseUpdated ? "updated" : "not in window")
+              << " | mapping anchor: "
+              << (mappingAnchorUpdated ? "updated" : "not in window")
+              << '\n';
+
+    return true;
+}
+
+int main(int argc, char* argv[]) {
     // ------------------------------------------------------------
     // Réduit les messages internes d'OpenCV.
     //
@@ -1780,8 +2512,7 @@ int main(int argc, char* argv[])
     //     trajectory.csv
     //     0.5
     // ------------------------------------------------------------
-    if (argc < 4)
-    {
+    if (argc < 4) {
         std::cerr << "Usage: video_visual_odometry "
                   << "<video_path> "
                   << "<calibration_file> "
@@ -1798,21 +2529,16 @@ int main(int argc, char* argv[])
     // 0.5 seconde par défaut
     double samplingIntervalSeconds = 0.5;
 
-    if (argc >= 5)
-    {
-        try
-        {
+    if (argc >= 5) {
+        try {
             samplingIntervalSeconds = std::stod(argv[4]);
-        }
-        catch (...)
-        {
+        } catch (...) {
             std::cerr << "Error: invalid sampling interval.\n";
             return 1;
         }
     }
 
-    if (samplingIntervalSeconds <= 0.0)
-    {
+    if (samplingIntervalSeconds <= 0.0) {
         std::cerr << "Error: sampling interval must be positive.\n";
         return 1;
     }
@@ -1827,8 +2553,7 @@ int main(int argc, char* argv[])
     );
 
 
-    if (!calibrationFile.isOpened()) 
-    {
+    if (!calibrationFile.isOpened()) {
         std::cerr << "Error: could not open calibration file: "
                   << calibrationPath
                   << '\n';
@@ -1860,8 +2585,7 @@ int main(int argc, char* argv[])
     if (cameraMatrix.empty() ||
         distortionCoefficients.empty() ||
         cameraMatrix.rows != 3 ||
-        cameraMatrix.cols != 3)
-    {
+        cameraMatrix.cols != 3) {
         std::cerr << "Error: invalid camera calibration.\n";
         return 1;
     }
@@ -1881,8 +2605,7 @@ int main(int argc, char* argv[])
     );
 
 
-    if (!video.isOpened())
-    {
+    if (!video.isOpened()) {
         std::cerr << "Error: could not open video: "
                   << videoPath
                   << '\n';
@@ -1904,8 +2627,7 @@ int main(int argc, char* argv[])
     );
 
 
-    if (fps <= 0.0)
-    {
+    if (fps <= 0.0) {
         std::cerr << "Error: invalide video FPS.\n";
         return 1;
     }
@@ -1928,8 +2650,7 @@ int main(int argc, char* argv[])
     // La vidéo de calibration et la vidéo de travail 
     // doivent être de même résolution.
     if (videoWidth != calibrationWidth ||
-        videoHeight != calibrationHeight)
-    {
+        videoHeight != calibrationHeight) {
         std::cerr << "Error: video resolution does not match "
                   << "the calibration resolution.\n";
 
@@ -1941,11 +2662,7 @@ int main(int argc, char* argv[])
     // Exemple:
     //  20 fps * 0.5 s = 10 frames
     const int frameStep = std::max(
-        1, static_cast<int>(
-                std::round(
-                    fps * samplingIntervalSeconds
-                )
-            )
+        1, static_cast<int>(std::round(fps * samplingIntervalSeconds))
     );
 
     std::cout << "Sampling interval: "
@@ -1960,23 +2677,16 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------
     // Préparation du fichier de trajectoire
     // ------------------------------------------------------------
-    if (outputCsvPath.has_parent_path())
-    {
-        fs::create_directories(
-            outputCsvPath.parent_path()
-        );
+    if (outputCsvPath.has_parent_path()) {
+        fs::create_directories(outputCsvPath.parent_path());
     }
 
-    std::ofstream trajectoryFile(
-        outputCsvPath
-    );
+    std::ofstream trajectoryFile(outputCsvPath);
 
-    if (!trajectoryFile.is_open())
-    {
+    if (!trajectoryFile.is_open()) {
         std::cerr << "Error: could not create trajectory file.\n";
         return 1;
     }
-
 
     trajectoryFile << "frame_index,"
                    << "time_seconds,"
@@ -1984,7 +2694,8 @@ int main(int argc, char* argv[])
                    << "y, "
                    << "z, "
                    << "good_matches,"
-                   << "pose_inliers\n";
+                   << "pose_inliers,"
+                   << "is_keyframe\n";
 
 
     // ------------------------------------------------------------
@@ -2044,11 +2755,14 @@ int main(int argc, char* argv[])
     // Contrairement à l'indice dans mapPoints, cet ID ne change
     // jamais lors d'un culling.
     std::vector<MapPointId> mapPointIds;
-
     MapPointId nextMapPointId = 0;
-
     bool mapInitialized = false;
 
+    // Points jugés instables par le write-back du BA
+    //
+    // On les conserve dans la carte pour le matching/PnP,
+    // mais ils ne participeront plus aux prochains BA locaux.
+    std::unordered_set<MapPointId> excludedFromLocalBundleAdjustment;
 
 
     // ------------------------------------------------------------
@@ -2147,19 +2861,8 @@ int main(int argc, char* argv[])
     // La première caméra définit notre origine: 
     //      Rwc = I et Cw = 0
     // ------------------------------------------------------------
-    cv::Mat worldFromCameraRotation = 
-        cv::Mat::eye(
-            3,
-            3,
-            CV_64F
-        );
-
-    cv::Mat cameraPositionWorld =
-        cv::Mat::zeros(
-            3,
-            1,
-            CV_64F
-        );
+    cv::Mat worldFromCameraRotation = cv::Mat::eye(3, 3, CV_64F);
+    cv::Mat cameraPositionWorld = cv::Mat::zeros(3, 1, CV_64F);
 
 
     // ------------------------------------------------------------
@@ -2203,13 +2906,10 @@ int main(int argc, char* argv[])
     int selectedFrames = 0;
     int successfulPoseSteps = 0;
 
-    while (true)
-    {
-        const bool frameRead =
-            video.read(frame);
+    while (true) {
+        const bool frameRead = video.read(frame);
 
-        if (!frameRead)
-        {
+        if (!frameRead) {
             std::cout
                 << "\n[VIDEO] Reading stopped at frame "
                 << frameIndex
@@ -2221,8 +2921,7 @@ int main(int argc, char* argv[])
         }
 
         // On ne traite qu'une frame sur frameStep.
-        if (frameIndex % frameStep != 0)
-        {
+        if (frameIndex % frameStep != 0) {
             ++frameIndex;
             continue;
         }
@@ -2230,11 +2929,7 @@ int main(int argc, char* argv[])
         ++selectedFrames;
 
         cv::Mat gray;
-        cv::cvtColor(
-            frame, 
-            gray,
-            cv::COLOR_BGR2GRAY
-        );
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
 
 
         // Détection ORB sur la frame courante
@@ -2248,8 +2943,7 @@ int main(int argc, char* argv[])
             currentDescriptors
         );
 
-        if (currentDescriptors.empty())
-        {
+        if (currentDescriptors.empty()) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : no descriptors\n";
@@ -2259,8 +2953,7 @@ int main(int argc, char* argv[])
         }
 
         // Première frame: simple initialisation de la trajectoire
-        if (!previousFrameInitialized)
-        {
+        if (!previousFrameInitialized) {
             previousGray = gray.clone();
             previousKeypoints = currentKeypoints;
             previousDescriptors = currentDescriptors.clone();
@@ -2269,7 +2962,7 @@ int main(int argc, char* argv[])
             trajectoryFile << frameIndex
                            << ","
                            << static_cast<double>(frameIndex) / fps
-                           << ",0,0,0,0,0\n";
+                           << ",0,0,0,0,0,0\n";
 
             std::cout << "[INIT] frame "
                       << frameIndex
@@ -2284,8 +2977,7 @@ int main(int argc, char* argv[])
         // ---------------------------------------------------------------
         // Localisation par rapport à la carte 3D existante
         // ---------------------------------------------------------------
-        if (mapInitialized)
-        {
+        if (mapInitialized) {
             // Matching :
             //
             // mapDescriptors       = descripteurs associés aux points 3D
@@ -2312,15 +3004,12 @@ int main(int argc, char* argv[])
             // ---------------------------------------------------
             std::vector<cv::DMatch> mapCandidateMatches;
             
-            for (const auto& candidates : mapKnnMatches)
-            {
-                if (candidates.size() < 2)
-                {
+            for (const auto& candidates : mapKnnMatches) {
+                if (candidates.size() < 2) {
                     continue;
                 }
 
-                if (candidates[0].distance < ratioThreshold * candidates[1].distance)
-                {
+                if (candidates[0].distance < ratioThreshold * candidates[1].distance) {
                     mapCandidateMatches.push_back(candidates[0]);
                 }
             }
@@ -2329,8 +3018,7 @@ int main(int argc, char* argv[])
                 mapCandidateMatches.begin(),
                 mapCandidateMatches.end(),
                 [](const cv::DMatch& a,
-                    const cv::DMatch& b)
-                {
+                    const cv::DMatch& b) {
                     return a.distance < b.distance;
                 }
             );
@@ -2345,11 +3033,9 @@ int main(int argc, char* argv[])
                 mapCandidateMatches.size()
             );
 
-            for (const cv::DMatch& match : mapCandidateMatches)
-            {
+            for (const cv::DMatch& match : mapCandidateMatches) {
                 // trainIdx correspond au keypoint de la frame courante
-                if (currentKeypointAlreadyUsed[match.trainIdx])
-                {
+                if (currentKeypointAlreadyUsed[match.trainIdx]) {
                     continue;
                 }
 
@@ -2384,15 +3070,13 @@ int main(int argc, char* argv[])
             // Ainsi, même si la pose est ensuite rejetée, on sait que
             // le descripteur du point est encore retrouvé dans l'image.
             // ---------------------------------------------------------
-            for (const cv::DMatch& match : mapGoodMatches)
-            {
+            for (const cv::DMatch& match : mapGoodMatches) {
                 const int mapPointIndex = match.queryIdx;
 
                 if (mapPointIndex < 0 ||
                     mapPointIndex >= static_cast<int>(
                         mapPointQualities.size()
-                        ))
-                {
+                        )) {
                     std::cerr << "Error: invalid map point index while updating last match.\n";
                     return 1;
                 }
@@ -2411,8 +3095,7 @@ int main(int argc, char* argv[])
                 mapGoodMatches.size()
             );
 
-            for (const cv::DMatch& match : mapGoodMatches)
-            {
+            for (const cv::DMatch& match : mapGoodMatches) {
                 pnpObjectPoints.push_back(
                     mapPoints[match.queryIdx]
                 );
@@ -2425,8 +3108,7 @@ int main(int argc, char* argv[])
 
             // Cas où il y a pas assez de correspondances 3D-2D: 
             // impossible de localiser proprement la caméra.
-            if (pnpObjectPoints.size() < minimumPnPCorrespondences)
-            {
+            if (pnpObjectPoints.size() < minimumPnPCorrespondences) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : only "
@@ -2464,8 +3146,7 @@ int main(int argc, char* argv[])
             // ------------------------------------------------------
 
             // 1ère condition : solvePnPRansac doit avoir réussi
-            if (!pnpSuccess)
-            {
+            if (!pnpSuccess) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : solvePnPRansac failed\n";
@@ -2485,8 +3166,7 @@ int main(int argc, char* argv[])
             // Avec les correspondances 2D désormais univoques, 15 à 19 
             // inliers peuvent être suffisants si leur ratio est 
             // particulièrement bon
-            if (pnpInliers.rows < minimumPnPInliers)
-            {
+            if (pnpInliers.rows < minimumPnPInliers) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : "
@@ -2503,8 +3183,7 @@ int main(int argc, char* argv[])
             // Cas "sparse but clean": 
             // entre 15 & 19 inliers, on demande au moins 60%
             if (pnpInliers.rows < 20 &&
-                pnpInlierRatio < minimumSparsePnPInlierRatio)
-            {
+                pnpInlierRatio < minimumSparsePnPInlierRatio) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : sparse PnP"
@@ -2522,8 +3201,7 @@ int main(int argc, char* argv[])
             // Une pose peut avoir 20 ou 30 inliers mais rester douteuse
             // si elle avait plusieurs centaines de correspondances
             // candidates au départ.
-            if (pnpInlierRatio < minimumPnPInlierRatio)
-            {
+            if (pnpInlierRatio < minimumPnPInlierRatio) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : low inlier ratio"
@@ -2557,19 +3235,14 @@ int main(int argc, char* argv[])
                 currentKeypoints.size(), -1
             );
 
-            for (int i = 0; i < pnpInliers.rows; ++i)
-            {
+            for (int i = 0; i < pnpInliers.rows; ++i) {
                 // solvePnPRansac retourne les indices dans pnpObjectPoints /
                 // pnpImagePoints.
                 // Ces deux vecteurs ont exactement le même ordre que
                 // mapGoodMatches.
-                const int matchListIndex =
-                    pnpInliers.at<int>(
-                        i, 0
-                    );
+                const int matchListIndex = pnpInliers.at<int>(i, 0);
 
-                const cv::DMatch& inlierMatch =
-                    mapGoodMatches[matchListIndex];
+                const cv::DMatch& inlierMatch = mapGoodMatches[matchListIndex];
 
                 // queryIdx = point de carte
                 // trainIdx = keypoint image courante
@@ -2588,9 +3261,7 @@ int main(int argc, char* argv[])
             // Distance 3D entre la dernière pose acceptée et la nouvelle
             // pose proposée par PnP
             const double rawStepDistance = 
-                cv::norm(
-                    candidateCameraPositionWorld - cameraPositionWorld
-                );
+                cv::norm(candidateCameraPositionWorld - cameraPositionWorld);
 
             // Si une ou plusieurs frames ont été rejetées,
             // rawStepDistance correspond à un temps plus long.
@@ -2605,43 +3276,25 @@ int main(int argc, char* argv[])
             // 30 frames écoulées : facteur 0.5
             // 45 frames écoulées : facteur 1/3
             const double normalizedStepDistance = 
-                rawStepDistance * 
-                static_cast<double>(frameStep) /
-                static_cast<double>(frameGap);
+                rawStepDistance * static_cast<double>(frameStep) / static_cast<double>(frameGap);
                 
 
             double recentMedianStep = 0.0;
-            double maximumAllowedStep =
-                std::numeric_limits<double>::infinity();
+            double maximumAllowedStep = std::numeric_limits<double>::infinity();
 
-            if (recentNormalizedStepDistances.size() >=
-                motionHistorySize) 
-            {
-                std::vector<double> sortedRecentSteps = 
-                    recentNormalizedStepDistances;
+            if (recentNormalizedStepDistances.size() >= motionHistorySize) {
+                std::vector<double> sortedRecentSteps = recentNormalizedStepDistances;
 
-                std::sort(
-                    sortedRecentSteps.begin(),
-                    sortedRecentSteps.end()
-                );
+                std::sort(sortedRecentSteps.begin(), sortedRecentSteps.end());
 
-                recentMedianStep =
-                    sortedRecentSteps[
-                        sortedRecentSteps.size() / 2
-                    ];
+                recentMedianStep = sortedRecentSteps[sortedRecentSteps.size() / 2];
 
                 maximumAllowedStep =
-                    std::max(
-                        minimumMaximumNormalizedStep,
-                        maximumStepMedianMultiplier * recentMedianStep
-                    );
+                    std::max(minimumMaximumNormalizedStep, maximumStepMedianMultiplier * recentMedianStep);
             }
 
-            if (recentNormalizedStepDistances.size() >=
-                motionHistorySize &&
-                normalizedStepDistance >
-                maximumAllowedStep)
-            {
+            if (recentNormalizedStepDistances.size() >= motionHistorySize &&
+                normalizedStepDistance > maximumAllowedStep) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : motion jump"
@@ -2657,56 +3310,47 @@ int main(int argc, char* argv[])
                 continue;
             }
 
-            cameraPositionWorld =
-                candidateCameraPositionWorld.clone();
+            const cv::Mat cameraPositionWorldBeforeAcceptedStep = cameraPositionWorld.clone();
 
+            cameraPositionWorld = candidateCameraPositionWorld.clone();
             worldFromCameraRotation = worldToCameraRotation.t();
 
-            lastAcceptedPoseFrameIndex =
-                frameIndex;
+            lastAcceptedPoseFrameIndex = frameIndex;
             
             // Tous les matches envoyés à PnP comptent comme tentative
             // d'observation du point 3D
-            for (const cv::DMatch& match : mapGoodMatches)
-            {
+            for (const cv::DMatch& match : mapGoodMatches) {
                 const int mapPointIndex = match.queryIdx;
 
                 ++mapPointQualities[mapPointIndex].pnpMatchCount;
             }
 
             // Les inliers PnP sont des observations confirmées
-            for (int i = 0; i < pnpInliers.rows; ++i)
-            {
-                const int matchListIndex = 
-                    pnpInliers.at<int>(i, 0);
+            for (int i = 0; i < pnpInliers.rows; ++i) {
+                const int matchListIndex = pnpInliers.at<int>(i, 0);
 
-                const int mapPointIndex = 
-                    mapGoodMatches[matchListIndex].queryIdx;
+                const cv::DMatch& inlierMatch = mapGoodMatches[matchListIndex];
 
-                MapPointQuality& quality = 
-                    mapPointQualities[mapPointIndex];
+                const int mapPointIndex = inlierMatch.queryIdx;
+
+                MapPointQuality& quality = mapPointQualities[mapPointIndex];
 
                 ++quality.pnpInlierCount;
 
                 quality.lastSeenFrameIndex = frameIndex;
-            }
 
-            recentNormalizedStepDistances.push_back(
-                normalizedStepDistance
-            );
-
-            if (recentNormalizedStepDistances.size() > motionHistorySize)
-            {
-                recentNormalizedStepDistances.erase(
-                    recentNormalizedStepDistances.begin()
-                );
+                // Mise à jour du descripteur du point 3D.
+                //
+                // La correspondance vient d'être validée comme inlier PnP,
+                // donc le descripteur observé dans la frame courante constitue
+                // une nouvelle apparence fiable de ce point.
+                //
+                // Cela permet à la carte de suivre progressivement les
+                // changements de point de vue.
+                currentDescriptors.row(inlierMatch.trainIdx).copyTo(mapDescriptors.row(mapPointIndex));
             }
 
             ++successfulPoseSteps;
-
-            const double x = cameraPositionWorld.at<double>(0, 0);
-            const double y = cameraPositionWorld.at<double>(1, 0);
-            const double z = cameraPositionWorld.at<double>(2, 0);
 
             // -----------------------------------------------------------
             // Décision adaptative de création d'une nouvelle keyframe
@@ -2753,21 +3397,14 @@ int main(int argc, char* argv[])
             //          tracking reste encore bon. 
             // -------------------------------------------------------
             const bool shouldCreateKeyframe = 
-                maximumGapReached || 
-                (
-                    enoughFrameSeparation && 
-                    trackingIsWeakening
-                );
+                maximumGapReached || (enoughFrameSeparation && trackingIsWeakening);
 
-            if (shouldCreateKeyframe)
-            {
+            if (shouldCreateKeyframe) {
                 std::cout << "[KEYFRAME] frame "
                           << frameIndex
                           << " selected"
                           << " | reason: "
-                          << (
-                                maximumGapReached ? "maximum gap" : "tracking weakening"
-                              )
+                          << (maximumGapReached ? "maximum gap" : "tracking weakening")
                           << " | gap: "
                           << framesSinceLastKeyframe
                           << " frames"
@@ -2837,8 +3474,7 @@ int main(int argc, char* argv[])
                 // -----------------------------------------------------
                 for (std::size_t mapPointIndex = mapSizeBefore;
                     mapPointIndex < mapPoints.size();
-                    ++mapPointIndex)
-                {
+                    ++mapPointIndex) {
                     MapPointQuality quality;
 
                     quality.creationFrameIndex = frameIndex;
@@ -2861,8 +3497,7 @@ int main(int argc, char* argv[])
                         mapPointQualities.size() ||
                     mapPoints.size() != 
                         mapPointIds.size()
-                   )
-                {
+                   ) {
                     std::cerr << "Error: map data size mismatch"
                               << " | points: "
                               << mapPoints.size()
@@ -2893,28 +3528,23 @@ int main(int argc, char* argv[])
                 const int stalePointAgeFrames =
                     12 * frameStep;                               // environ 6 secondes
 
-                for (const MapPointQuality& quality : mapPointQualities)
-                {
-                    if (quality.pnpInlierCount == 0)
-                    {
+                for (const MapPointQuality& quality : mapPointQualities) {
+                    if (quality.pnpInlierCount == 0) {
                         ++neverConfirmedByPnP;
                     }
 
-                    if (quality.pnpInlierCount >= 1)
-                    {
+                    if (quality.pnpInlierCount >= 1) {
                         ++confirmedAtLeastOnce;
                     }
 
-                    if (quality.pnpInlierCount >= 3)
-                    {
+                    if (quality.pnpInlierCount >= 3) {
                         ++confirmedAtLeastThreeTimes;
                     }
 
                     const int framesSinceLastSeen =
                         frameIndex - quality.lastSeenFrameIndex;
 
-                    if (framesSinceLastSeen >= stalePointAgeFrames)
-                    {
+                    if (framesSinceLastSeen >= stalePointAgeFrames) {
                         ++staleMapPoints;
                     }
 
@@ -2924,8 +3554,7 @@ int main(int argc, char* argv[])
                     // Point suffisamment ancien pour avoir eu plusieurs occasions
                     // d'être réobservé, mais jamais validé par PnP.
                     if (pointAgeFrames >= 12 * frameStep &&
-                        quality.pnpInlierCount == 0)
-                    {
+                        quality.pnpInlierCount == 0) {
                         ++oldNeverConfirmed;
                     }
 
@@ -2933,14 +3562,12 @@ int main(int argc, char* argv[])
                     // accepté comme inlier PnP.
                     // On exige au moins 5 tentatives pour ne pas tirer de 
                     // conclusion à partir de trop peu d'observations.
-                    if (quality.pnpMatchCount >= 5)
-                    {
+                    if (quality.pnpMatchCount >= 5) {
                         const double confirmationRatio = 
                             static_cast<double>(quality.pnpInlierCount) /
                             static_cast<double>(quality.pnpMatchCount);
 
-                        if (confirmationRatio < 0.25)
-                        {
+                        if (confirmationRatio < 0.25) {
                             ++lowPnPConfirmationRatio;
                         }
                     }
@@ -2972,28 +3599,18 @@ int main(int argc, char* argv[])
 
                 const int culledMapPoints = 
                     cullOldNeverConfirmedMapPoints(
-                        frameIndex,
-                        minimumCullingAgeFrames,
-                        maximumUnmatchedAgeFrames,
-
-                        mapPoints,
-                        mapDescriptors,
-                        mapPointQualities,
-                        mapPointIds,
-
-                        keyframeMapPointIndices,
-                        currentMapPointIndices
+                        frameIndex, minimumCullingAgeFrames, maximumUnmatchedAgeFrames,
+                        mapPoints, mapDescriptors, mapPointQualities, mapPointIds,
+                        keyframeMapPointIndices, currentMapPointIndices
                     );
 
-                if (culledMapPoints < 0)
-                {
+                if (culledMapPoints < 0) {
                     return 1;
                 }
 
                 if (mapPoints.size() != static_cast<std::size_t>(mapDescriptors.rows) ||
                     mapPoints.size() != mapPointQualities.size() ||
-                    mapPoints.size() != mapPointIds.size())
-                {
+                    mapPoints.size() != mapPointIds.size()) {
                     std::cerr << "Error: map data size mismatch after culling"
                               << " | points: "
                               << mapPoints.size()
@@ -3027,8 +3644,7 @@ int main(int argc, char* argv[])
                     mapPointIds,
 
                     keyframeWorldToCameraRotation,
-                    keyframeTranslationVector))
-                {
+                    keyframeTranslationVector)) {
                     return 1;
                 }
 
@@ -3056,8 +3672,7 @@ int main(int argc, char* argv[])
                     worldToCameraRotation,
                     translationVector,
 
-                    currentKeyframeRecord))
-                {
+                    currentKeyframeRecord)) {
                     return 1;
                 }
 
@@ -3083,26 +3698,42 @@ int main(int argc, char* argv[])
                 );
 
 
-                if (keyframeHistory.size() >= 5)
-                {
+                if (keyframeHistory.size() >= 5) {
                     LocalBundleAdjustmentProblem localBundleAdjustmentProblem;
 
                     if (!buildLocalBundleAdjustmentProblem(
                         keyframeHistory,
                         mapPoints, mapPointIds,
+                        excludedFromLocalBundleAdjustment,
                         cameraMatrix,distortionCoefficients,
                         5,
-                        localBundleAdjustmentProblem))
-                    {
+                        localBundleAdjustmentProblem)) {
+
                         return 1;
                     }
 
                     if (!runLocalBundleAdjustment(
-                        localBundleAdjustmentProblem, cameraMatrix))
-                    {
+                        localBundleAdjustmentProblem, cameraMatrix)) {
+
                         std::cerr << "Error: local bundle adjustment failed.\n";
                         return 1;
                     }
+
+                    if (!applyLocalBundleAdjustmentResults(
+                            localBundleAdjustmentProblem,
+                            mapPoints, mapPointIds,
+                            excludedFromLocalBundleAdjustment,
+                            keyframeHistory,
+                            frameIndex, worldToCameraRotation, translationVector, worldFromCameraRotation, cameraPositionWorld,
+                            keyframeFrameIndex, keyframeWorldToCameraRotation, keyframeTranslationVector,
+                            std::max(
+                                1.0, maximumAllowedStep
+                            ))) {
+
+                        std::cerr << "Error: local bundle adjustment write-back failed.\n";
+                        return 1;
+                    }
+                    
                 }
                 
                 // -------------------------------------------------------------
@@ -3130,8 +3761,7 @@ int main(int argc, char* argv[])
                 // La sélection de la keyframe et le changement d'ancre sont
                 // désormais deux décisions différentes.
                 // -----------------------------------------------------------
-                if (enoughNewMapPoints || mappingAnchorTooOld)
-                {
+                if (enoughNewMapPoints || mappingAnchorTooOld) {
                     keyframeFrameIndex = frameIndex;
 
                     keyframeKeypoints = currentKeypoints;
@@ -3145,17 +3775,13 @@ int main(int argc, char* argv[])
                     std::cout << "[MAP ANCHOR] promoted frame: "
                               << frameIndex
                               << " | reason: "
-                              << (
-                                    enoughNewMapPoints ? "map growth" : "anchor age"
-                                  )
+                              << (enoughNewMapPoints ? "map growth" : "anchor age")
                               << " | added points: "
                               << addedMapPoints
                               << " | previous anchor age: "
                               << framesSinceMappingAnchor
                               << " frames\n";
-                }
-                else
-                {
+                } else {
                     std::cout << "[MAP ANCHOR] kept frame: "
                               << keyframeFrameIndex
                               << " | candidate frame: "
@@ -3167,6 +3793,37 @@ int main(int argc, char* argv[])
                               << " frames\n";
                 }
             }
+
+            // -----------------------------------------------------------
+            // Mise à jour de l'historique dmouvement avec la pose 
+            // FINALE réellement conservée.
+            // 
+            // Si un BA a été exécuté & accepté, cameraPositionWorld
+            // contient ici la pose corrigée par le BA.
+            // Sinon elle contient simplement la pose PnP.
+            // -----------------------------------------------------------
+            const double finalRawStepDistance =
+                cv::norm(
+                    cameraPositionWorld - cameraPositionWorldBeforeAcceptedStep
+                );
+
+            const double finalNormalizedStepDistance = 
+                finalRawStepDistance * static_cast<double>(frameStep) / static_cast<double>(frameGap);
+
+            recentNormalizedStepDistances.push_back(
+                finalNormalizedStepDistance
+            );
+
+            if (recentNormalizedStepDistances.size() > motionHistorySize) {
+                recentNormalizedStepDistances.erase(
+                    recentNormalizedStepDistances.begin()
+                );
+            }
+
+
+            const double x = cameraPositionWorld.at<double>(0, 0);
+            const double y = cameraPositionWorld.at<double>(1, 0);
+            const double z = cameraPositionWorld.at<double>(2, 0);
 
             // Sauvegarde CSV
             trajectoryFile << frameIndex
@@ -3182,6 +3839,8 @@ int main(int argc, char* argv[])
                            << mapGoodMatches.size()
                            << ","
                            << pnpInliers.rows
+                           << ","
+                           << (shouldCreateKeyframe ? 1 : 0)
                            << '\n';
 
             std::cout << "[PNP OK] frame "
@@ -3219,35 +3878,26 @@ int main(int argc, char* argv[])
         std::vector<std::vector<cv::DMatch>> knnMatches;
 
         matcher.knnMatch(
-            previousDescriptors,
-            currentDescriptors,
-            knnMatches,
-            2
+            previousDescriptors, currentDescriptors, knnMatches, 2
         );
 
 
         std::vector<cv::DMatch> goodMatches;
 
-        for (const auto& candidates : knnMatches)
-        {
-            if (candidates.size() < 2)
-            {
+        for (const auto& candidates : knnMatches) {
+            if (candidates.size() < 2) {
                 continue;
             }
 
-            if (candidates[0].distance < ratioThreshold * candidates[1].distance)
-            {
-                goodMatches.push_back(
-                    candidates[0]
-                );
+            if (candidates[0].distance < ratioThreshold * candidates[1].distance) {
+                goodMatches.push_back(candidates[0]);
             }
         }
 
 
         // On demande un minimum de correspondances pour éviter 
         // une estimation géométrique extrêmement fragile.
-        if (goodMatches.size() < 20)
-        {
+        if (goodMatches.size() < 20) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : only "
@@ -3274,8 +3924,7 @@ int main(int argc, char* argv[])
         );
 
 
-        for (const cv::DMatch& match : goodMatches)
-        {
+        for (const cv::DMatch& match : goodMatches) {
             pointsPrevious.push_back(
                 previousKeypoints[match.queryIdx].pt
             );
@@ -3333,8 +3982,7 @@ int main(int argc, char* argv[])
                 essentialMask
             );
 
-        if (essentialMatrix.empty())
-        {
+        if (essentialMatrix.empty()) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : essential matrix failed\n";
@@ -3363,8 +4011,7 @@ int main(int argc, char* argv[])
                 poseMask
             );
 
-        if (poseInliers < 15)
-        {
+        if (poseInliers < 15) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : only "
@@ -3381,8 +4028,7 @@ int main(int argc, char* argv[])
         // 
         // Ce bloc ne doit être exécuté qu'une et une seule fois.
         // -------------------------------------------------------------
-        if (!mapInitialized)
-        {
+        if (!mapInitialized) {
             // Correspondances qui ont ont réellement survécu à recoverPose
             std::vector<cv::Point2f> bootstrapPoints1;
             std::vector<cv::Point2f> bootstrapPoints2;
@@ -3402,10 +4048,8 @@ int main(int argc, char* argv[])
             );
 
 
-            for (std::size_t i = 0; i < goodMatches.size(); ++i)
-            {
-                if (poseMask.at<uchar>(static_cast<int>(i)) == 0)
-                {
+            for (std::size_t i = 0; i < goodMatches.size(); ++i) {
+                if (poseMask.at<uchar>(static_cast<int>(i)) == 0) {
                     continue;
                 }
 
@@ -3486,33 +4130,20 @@ int main(int argc, char* argv[])
             );
 
             // Conversion en points 3D euclidiens + cheirality
-            for (int i = 0; i < homogeneousPoints4D64.cols; ++i)
-            {
+            for (int i = 0; i < homogeneousPoints4D64.cols; ++i) {
                 const double w = homogeneousPoints4D64.at<double>(
                     3, i
                 );
 
-                if (std::abs(w) < 1e-9)
-                {
+                if (std::abs(w) < 1e-9) {
                     continue;
                 };
 
-                const double pointX = homogeneousPoints4D64.at<double>(
-                    0, i
-                ) / w;
+                const double pointX = homogeneousPoints4D64.at<double>(0, i) / w;
+                const double pointY = homogeneousPoints4D64.at<double>(1, i) / w;
+                const double pointZ = homogeneousPoints4D64.at<double>(2, i) / w;
 
-                const double pointY = homogeneousPoints4D64.at<double>(
-                    1, i
-                ) / w;
-
-                const double pointZ = homogeneousPoints4D64.at<double>(
-                    2, i
-                ) / w;
-
-                if (!std::isfinite(pointX) ||
-                    !std::isfinite(pointY) ||
-                    !std::isfinite(pointZ))
-                {
+                if (!std::isfinite(pointX) || !std::isfinite(pointY) || !std::isfinite(pointZ)) {
                     continue;
                 }
 
@@ -3524,13 +4155,9 @@ int main(int argc, char* argv[])
                     relativeRotation * pointCamera1 + relativeTranslation;
 
                 const double depth1 = pointZ;
-                const double depth2 = pointCamera2.at<double>(
-                    2, 0
-                );
+                const double depth2 = pointCamera2.at<double>(2, 0);
 
-                if (depth1 <= 0.0 ||
-                    depth2 <= 0.0)
-                {
+                if (depth1 <= 0.0 || depth2 <= 0.0) {
                     continue;
                 }
 
@@ -3538,10 +4165,7 @@ int main(int argc, char* argv[])
                 const cv::DMatch& match = bootstrapMatches[i];
 
                 // Indice que le nouveau point va recevoir dans mapPoints
-                const int newMapPointIndex = 
-                    static_cast<int>(
-                        mapPoints.size()
-                    );
+                const int newMapPointIndex = static_cast<int>(mapPoints.size());
 
                 mapPoints.emplace_back(
                     static_cast<float>(pointX),
@@ -3550,9 +4174,7 @@ int main(int argc, char* argv[])
                 );
 
                 mapDescriptors.push_back(
-                    currentDescriptors.row(
-                        match.trainIdx
-                    )
+                    currentDescriptors.row(match.trainIdx)
                 );
 
                 // Le keypoint de la deuxième image sait maintenant 
@@ -3561,17 +4183,12 @@ int main(int argc, char* argv[])
             }
 
             // Vérification de l'invariant carte/descripteurs
-            if (mapPoints.size() !=
-                static_cast<std::size_t>(
-                    mapDescriptors.rows
-                ))
-            {
+            if (mapPoints.size() != static_cast<std::size_t>(mapDescriptors.rows)) {
                 std::cerr << "Error: map point/descriptor mismatch.\n";
                 return 1;
             }
 
-            if (mapPoints.size() < 20)
-            {
+            if (mapPoints.size() < 20) {
                 std::cout << "[MAP INIT FAILED] only "
                           << mapPoints.size()
                           << " valid 3D points\n";
@@ -3598,8 +4215,7 @@ int main(int argc, char* argv[])
                 mapPoints.size()
             );
 
-            for (MapPointQuality& quality : mapPointQualities)
-            {
+            for (MapPointQuality& quality : mapPointQualities) {
                 quality.creationFrameIndex = frameIndex;
                 quality.lastSeenFrameIndex = frameIndex;
                 quality.lastMatchedFrameIndex = frameIndex;
@@ -3611,8 +4227,7 @@ int main(int argc, char* argv[])
                 mapPoints.size()
             );
 
-            for (std::size_t i = 0; i < mapPoints.size(); ++i)
-            {
+            for (std::size_t i = 0; i < mapPoints.size(); ++i) {
                 mapPointIds.push_back(
                     nextMapPointId++
                 );
@@ -3620,8 +4235,7 @@ int main(int argc, char* argv[])
 
 
             if (mapPointQualities.size() != mapPoints.size() ||
-                mapPointIds.size() != mapPoints.size())
-            {
+                mapPointIds.size() != mapPoints.size()) {
                 std::cerr << "Error: map data mismatch after bootstrap"
                           << " | points: "
                           << mapPoints.size()
@@ -3665,8 +4279,7 @@ int main(int argc, char* argv[])
                 relativeRotation,
                 relativeTranslation,
 
-                initialKeyframeRecord))
-            {
+                initialKeyframeRecord)) {
                 return 1;
             }
 
@@ -3747,14 +4360,9 @@ int main(int argc, char* argv[])
         // -------------------------------------------------------------
         // Sauvegarde de la trajectoire
         // -------------------------------------------------------------
-        const double x =
-            cameraPositionWorld.at<double>(0, 0);
-
-        const double y =
-            cameraPositionWorld.at<double>(1, 0);
-
-        const double z =
-            cameraPositionWorld.at<double>(2, 0);
+        const double x = cameraPositionWorld.at<double>(0, 0);
+        const double y = cameraPositionWorld.at<double>(1, 0);
+        const double z = cameraPositionWorld.at<double>(2, 0);
 
         trajectoryFile << frameIndex
                        << ","
@@ -3769,6 +4377,8 @@ int main(int argc, char* argv[])
                        << goodMatches.size()
                        << ","
                        << poseInliers
+                       << ","
+                       << (mapInitialized ? 1 : 0)
                        << '\n';
 
 

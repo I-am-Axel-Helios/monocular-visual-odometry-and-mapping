@@ -7,8 +7,7 @@
 #include <opencv2/opencv.hpp>
 
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     std::cout << "\n\n=== Monocular Visual Odometry and Mapping ===\n\n";
     // --------------------------------------------------------
     // Arguments du programme
@@ -18,8 +17,7 @@ int main(int argc, char* argv[])
     // argv[2] = deuxième image
     // argv[3] = fichier de calibration caméra
     // --------------------------------------------------------
-    if (argc < 4)
-    {
+    if (argc < 4) {
         std::cerr << "Usage: monocular_visual_odometry "
                   << "<image_1> <image_2> <calibration_file>\n";
         return 1;
@@ -49,8 +47,7 @@ int main(int argc, char* argv[])
     );
 
     // SI OpenCV n'a pas réussi à charger les images, cv::Mat sera vide.
-    if (image1.empty() || image2.empty())
-    {
+    if (image1.empty() || image2.empty()) {
         std::cerr << "Error: could not load one or both images.\n";
         return 1;
     }
@@ -80,8 +77,7 @@ int main(int argc, char* argv[])
     );
 
     // En cas de problème lors du chargement de la calibration
-    if (!calibrationFile.isOpened())
-    {
+    if (!calibrationFile.isOpened()) {
         std::cerr << "Error: could not open calibration file: "
             << calibrationPath
             << '\n';
@@ -119,8 +115,7 @@ int main(int argc, char* argv[])
     if (cameraMatrix.empty() || 
         cameraMatrix.rows != 3 ||
         cameraMatrix.cols != 3 || 
-        distortionCoefficients.empty())
-    {
+        distortionCoefficients.empty()) {
         std::cerr << "Error: invalid calibration data.\n";
         return 1;
     }
@@ -131,8 +126,7 @@ int main(int argc, char* argv[])
     if (image1.cols != calibrationWidth ||
         image1.rows != calibrationHeight ||
         image2.cols != calibrationWidth ||
-        image2.rows != calibrationHeight)
-    {
+        image2.rows != calibrationHeight) {
         std::cerr << "Calibration: "
                   << calibrationWidth
                   << " x "
@@ -266,11 +260,9 @@ int main(int argc, char* argv[])
 
     std::vector<cv::DMatch> goodMatches;
 
-    for (const auto& candidates : knnMatches)
-    {
+    for (const auto& candidates : knnMatches) {
         // Il faut au moins 2 candidats pour calculer le ratio.
-        if (candidates.size() < 2)
-        {
+        if (candidates.size() < 2) {
             continue;
         }
 
@@ -279,8 +271,7 @@ int main(int argc, char* argv[])
 
         // On garde le meilleur candidat uniquement s'il est 
         // nettement meilleur que le deuxieme
-        if (bestMatch.distance < ratioThreshold * secondMatch.distance)
-        {
+        if (bestMatch.distance < ratioThreshold * secondMatch.distance) {
             goodMatches.push_back(bestMatch);
         }
     }
@@ -301,8 +292,7 @@ int main(int argc, char* argv[])
     std::sort(
         goodMatches.begin(),
         goodMatches.end(),
-        [](const cv::DMatch& a, const cv::DMatch& b)
-        {
+        [](const cv::DMatch& a, const cv::DMatch& b) {
             return a.distance < b.distance;
         }
     );
@@ -321,8 +311,7 @@ int main(int argc, char* argv[])
     points1.reserve(goodMatches.size());
     points2.reserve(goodMatches.size());
 
-    for (const cv::DMatch& match : goodMatches)
-    {
+    for (const cv::DMatch& match : goodMatches) {
         // queryIdx -> point dans l'image 1
         // trainIdx -> point correspondant dans l'image 2
         points1.push_back(
@@ -345,8 +334,7 @@ int main(int argc, char* argv[])
 
     cv::Mat fundamentalMask;
 
-    if (points1.size() < 8)
-    {
+    if (points1.size() < 8) {
         std::cerr << "Error: not enough correspondences "
                   << "to estimate the fundamental matrix.\n";
         return 1;
@@ -369,8 +357,7 @@ int main(int argc, char* argv[])
         fundamentalMask
     );
 
-    if (fundamentalMatrix.empty()) 
-    {
+    if (fundamentalMatrix.empty()) {
         std::cerr << "Error: fundamental matrix estimation failed.\n";
         return 1;
     }
@@ -382,10 +369,8 @@ int main(int argc, char* argv[])
 
     std::vector<cv::DMatch> inliersMatches;
 
-    for (std::size_t i = 0; i < goodMatches.size(); ++i)
-    {
-        if (fundamentalMask.at<uchar>(static_cast<int>(i)) != 0)
-        {
+    for (std::size_t i = 0; i < goodMatches.size(); ++i) {
+        if (fundamentalMask.at<uchar>(static_cast<int>(i)) != 0) {
             inliersMatches.push_back(goodMatches[i]);
         }
     }
@@ -411,8 +396,7 @@ int main(int argc, char* argv[])
     posePoints1.reserve(inliersMatches.size());
     posePoints2.reserve(inliersMatches.size());
 
-    for (const cv::DMatch& match : inliersMatches)
-    {
+    for (const cv::DMatch& match : inliersMatches) {
         posePoints1.push_back(
             keypoints1[match.queryIdx].pt
         );
@@ -479,8 +463,7 @@ int main(int argc, char* argv[])
     );
 
 
-    if (essentialMatrix.empty())
-    {
+    if (essentialMatrix.empty()) {
         std::cerr << "Error: essential matrix estimation failed.\n";
         return 1;
     }
@@ -550,10 +533,8 @@ int main(int argc, char* argv[])
     // --------------------------------------------------------
     std::vector<cv::DMatch> poseInliersMatches;
 
-    for (std::size_t i = 0; i < inliersMatches.size(); ++i)
-    {
-        if (poseMask.at<uchar>(static_cast<int>(i)) != 0)
-        {
+    for (std::size_t i = 0; i < inliersMatches.size(); ++i) {
+        if (poseMask.at<uchar>(static_cast<int>(i)) != 0) {
             poseInliersMatches.push_back(
                 inliersMatches[i]
             );
@@ -578,10 +559,8 @@ int main(int argc, char* argv[])
     triangulationPoints1.reserve(poseInliers);
     triangulationPoints2.reserve(poseInliers);
 
-    for (std::size_t i = 0; i < undistortedPoints1.size(); ++i)
-    {
-        if (poseMask.at<uchar>(static_cast<int>(i)) != 0)
-        {
+    for (std::size_t i = 0; i < undistortedPoints1.size(); ++i) {
+        if (poseMask.at<uchar>(static_cast<int>(i)) != 0) {
             triangulationPoints1.push_back(
                 undistortedPoints1[i]
             );
@@ -692,13 +671,11 @@ int main(int argc, char* argv[])
     );
 
 
-    for (int i = 0; i < homogeneousPoints4D64.cols; ++i)
-    {
+    for (int i = 0; i < homogeneousPoints4D64.cols; ++i) {
         const double w = homogeneousPoints4D64.at<double>(3, i);
 
         // Au cas où w est quasi-nul, la division est instable.
-        if (std::abs(w) < 1e-9)
-        {
+        if (std::abs(w) < 1e-9) {
             continue;
         }
 
@@ -709,8 +686,7 @@ int main(int argc, char* argv[])
         // Rejet des résultats non numériques ou infinis
         if (!std::isfinite(x) ||
             !std::isfinite(y) ||
-            !std::isfinite(z))
-        {
+            !std::isfinite(z)) {
             continue;
         }
 
@@ -727,8 +703,7 @@ int main(int argc, char* argv[])
 
         // Le point doit être devant les deux caméras
         if (depth1 <= 0.0 ||
-            depth2 <= 0.0)
-        {
+            depth2 <= 0.0) {
             continue;
         }
 
@@ -763,8 +738,7 @@ int main(int argc, char* argv[])
             triangulatedPoints.size()
         );
 
-    for (std::size_t i = 0; i < pointsToPrint; ++i)
-    {
+    for (std::size_t i = 0; i < pointsToPrint; ++i) {
         const cv::Point3d& point = triangulatedPoints[i];
 
         std::cout << "Point "
@@ -790,8 +764,7 @@ int main(int argc, char* argv[])
     double totalSquaredReprojectionError = 0.0;
     double maximumReprojectionError = 0.0;
 
-    for (std::size_t i = 0; i < triangulatedPoints.size(); ++i)
-    {
+    for (std::size_t i = 0; i < triangulatedPoints.size(); ++i) {
         const cv::Point3d& point3D = 
             triangulatedPoints[i];
 
@@ -882,8 +855,7 @@ int main(int argc, char* argv[])
 
     double reprojectionRms = 0.0;
 
-    if (!triangulatedPoints.empty())
-    {
+    if (!triangulatedPoints.empty()) {
         reprojectionRms = 
             std::sqrt(
                 totalSquaredReprojectionError /

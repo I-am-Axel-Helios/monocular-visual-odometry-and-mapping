@@ -12,8 +12,7 @@
 
 namespace fs = std::filesystem;
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     // ------------------------------------------------------------
     // Réduit les messages internes d'OpenCV.
     //
@@ -44,8 +43,7 @@ int main(int argc, char* argv[])
     //     trajectory.csv
     //     0.5
     // ------------------------------------------------------------
-    if (argc < 4)
-    {
+    if (argc < 4) {
         std::cerr << "Usage: video_visual_odometry "
                   << "<video_path> "
                   << "<calibration_file> "
@@ -62,21 +60,16 @@ int main(int argc, char* argv[])
     // 0.5 seconde par défaut
     double samplingIntervalSeconds = 0.5;
 
-    if (argc >= 5)
-    {
-        try
-        {
+    if (argc >= 5) {
+        try {
             samplingIntervalSeconds = std::stod(argv[4]);
-        }
-        catch (...)
-        {
+        } catch (...) {
             std::cerr << "Error: invalid sampling interval.\n";
             return 1;
         }
     }
 
-    if (samplingIntervalSeconds <= 0.0)
-    {
+    if (samplingIntervalSeconds <= 0.0) {
         std::cerr << "Error: sampling interval must be positive.\n";
         return 1;
     }
@@ -91,8 +84,7 @@ int main(int argc, char* argv[])
     );
 
 
-    if (!calibrationFile.isOpened()) 
-    {
+    if (!calibrationFile.isOpened()) {
         std::cerr << "Error: could not open calibration file: "
                   << calibrationPath
                   << '\n';
@@ -124,8 +116,7 @@ int main(int argc, char* argv[])
     if (cameraMatrix.empty() ||
         distortionCoefficients.empty() ||
         cameraMatrix.rows != 3 ||
-        cameraMatrix.cols != 3)
-    {
+        cameraMatrix.cols != 3) {
         std::cerr << "Error: invalid camera calibration.\n";
         return 1;
     }
@@ -145,8 +136,7 @@ int main(int argc, char* argv[])
     );
 
 
-    if (!video.isOpened())
-    {
+    if (!video.isOpened()) {
         std::cerr << "Error: could not open video: "
                   << videoPath
                   << '\n';
@@ -168,8 +158,7 @@ int main(int argc, char* argv[])
     );
 
 
-    if (fps <= 0.0)
-    {
+    if (fps <= 0.0) {
         std::cerr << "Error: invalide video FPS.\n";
         return 1;
     }
@@ -192,8 +181,7 @@ int main(int argc, char* argv[])
     // La vidéo de calibration et la vidéo de travail 
     // doivent être de même résolution.
     if (videoWidth != calibrationWidth ||
-        videoHeight != calibrationHeight)
-    {
+        videoHeight != calibrationHeight) {
         std::cerr << "Error: video resolution does not match "
                   << "the calibration resolution.\n";
 
@@ -224,8 +212,7 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------
     // Préparation du fichier de trajectoire
     // ------------------------------------------------------------
-    if (outputCsvPath.has_parent_path())
-    {
+    if (outputCsvPath.has_parent_path()) {
         fs::create_directories(
             outputCsvPath.parent_path()
         );
@@ -235,8 +222,7 @@ int main(int argc, char* argv[])
         outputCsvPath
     );
 
-    if (!trajectoryFile.is_open())
-    {
+    if (!trajectoryFile.is_open()) {
         std::cerr << "Error: could not create trajectory file.\n";
         return 1;
     }
@@ -312,13 +298,11 @@ int main(int argc, char* argv[])
     int selectedFrames = 0;
     int successfulPoseSteps = 0;
 
-    while (true)
-    {
+    while (true) {
         const bool frameRead =
             video.read(frame);
 
-        if (!frameRead)
-        {
+        if (!frameRead) {
             std::cout
                 << "\n[VIDEO] Reading stopped at frame "
                 << frameIndex
@@ -330,8 +314,7 @@ int main(int argc, char* argv[])
         }
 
         // On ne traite qu'une frame sur frameStep.
-        if (frameIndex % frameStep != 0)
-        {
+        if (frameIndex % frameStep != 0) {
             ++frameIndex;
             continue;
         }
@@ -357,8 +340,7 @@ int main(int argc, char* argv[])
             currentDescriptors
         );
 
-        if (currentDescriptors.empty())
-        {
+        if (currentDescriptors.empty()) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : no descriptors\n";
@@ -368,8 +350,7 @@ int main(int argc, char* argv[])
         }
 
         // Première frame: simple initialisation de la trajectoire
-        if (!previousFrameInitialized)
-        {
+        if (!previousFrameInitialized) {
             previousGray = gray.clone();
             previousKeypoints = currentKeypoints;
             previousDescriptors = currentDescriptors.clone();
@@ -405,15 +386,12 @@ int main(int argc, char* argv[])
 
         std::vector<cv::DMatch> goodMatches;
 
-        for (const auto& candidates : knnMatches)
-        {
-            if (candidates.size() < 2)
-            {
+        for (const auto& candidates : knnMatches) {
+            if (candidates.size() < 2) {
                 continue;
             }
 
-            if (candidates[0].distance < ratioThreshold * candidates[1].distance)
-            {
+            if (candidates[0].distance < ratioThreshold * candidates[1].distance) {
                 goodMatches.push_back(
                     candidates[0]
                 );
@@ -423,8 +401,7 @@ int main(int argc, char* argv[])
 
         // On demande un minimum de correspondances pour éviter 
         // une estimation géométrique extrêmement fragile.
-        if (goodMatches.size() < 20)
-        {
+        if (goodMatches.size() < 20) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : only "
@@ -451,8 +428,7 @@ int main(int argc, char* argv[])
         );
 
 
-        for (const cv::DMatch& match : goodMatches)
-        {
+        for (const cv::DMatch& match : goodMatches) {
             pointsPrevious.push_back(
                 previousKeypoints[match.queryIdx].pt
             );
@@ -510,8 +486,7 @@ int main(int argc, char* argv[])
                 essentialMask
             );
 
-        if (essentialMatrix.empty())
-        {
+        if (essentialMatrix.empty()) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : essential matrix failed\n";
@@ -540,8 +515,7 @@ int main(int argc, char* argv[])
                 poseMask
             );
 
-        if (poseInliers < 15)
-        {
+        if (poseInliers < 15) {
             std::cout << "[SKIP] frame "
                       << frameIndex
                       << " : only "

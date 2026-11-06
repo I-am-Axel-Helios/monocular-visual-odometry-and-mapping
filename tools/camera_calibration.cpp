@@ -15,8 +15,7 @@
 namespace fs = std::filesystem;
 
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     // --------------------------------------------------------------------
     // Vérification des arguments
     //
@@ -24,8 +23,7 @@ int main(int argc, char* argv[])
     //
     // Exemple : camera_calibration data/calibration
     // --------------------------------------------------------------------
-    if (argc < 3)
-    {
+    if (argc < 3) {
         std::cerr << "Usage: camera_calibration "
                   << "<calibration_directory> "
                   << "<output_calibration_file>\n";
@@ -36,8 +34,7 @@ int main(int argc, char* argv[])
     const fs::path calibrationDirectory = argv[1];
     const fs::path outputPath = argv[2];
 
-    if (!fs::exists(calibrationDirectory)) 
-    {
+    if (!fs::exists(calibrationDirectory)) {
         std::cerr << "Error: directory does not exist: "
                   << calibrationDirectory
                   << '\n';
@@ -79,10 +76,8 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------
     std::vector<cv::Point3f> boardObjectPoints;
 
-    for (int row = 0; row < boardSize.height; ++row)
-    {
-        for (int col = 0; col < boardSize.width; ++col)
-        {
+    for (int row = 0; row < boardSize.height; ++row) {
+        for (int col = 0; col < boardSize.width; ++col) {
             boardObjectPoints.emplace_back(
                 col * squareSize,
                 row * squareSize,
@@ -97,10 +92,8 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------
     std::vector<fs::path> imageFiles;
 
-    for (const auto& entry : fs::directory_iterator(calibrationDirectory))
-    {
-        if (!entry.is_regular_file())
-        {
+    for (const auto& entry : fs::directory_iterator(calibrationDirectory)) {
+        if (!entry.is_regular_file()) {
             continue;
         }
 
@@ -112,16 +105,14 @@ int main(int argc, char* argv[])
             extension.begin(),
             extension.end(),
             extension.begin(),
-            [](unsigned char c)
-            {
+            [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             }
         );
 
         if (extension == ".jpg" ||
             extension == ".jpeg" ||
-            extension == ".png")
-        {
+            extension == ".png") {
             imageFiles.push_back(entry.path());
         }
     }
@@ -136,8 +127,7 @@ int main(int argc, char* argv[])
         << imageFiles.size()
         << "\n\n";
 
-    if (imageFiles.empty())
-    {
+    if (imageFiles.empty()) {
         std::cerr << "Error: no calibration images found.\n";
         return 1;
     }
@@ -158,8 +148,7 @@ int main(int argc, char* argv[])
 
     int portraitCount = 0;
 
-    for (const fs::path& imagePath : imageFiles)
-    {
+    for (const fs::path& imagePath : imageFiles) {
         cv::Mat image = cv::imread(
             imagePath.string(),
             cv::IMREAD_COLOR
@@ -169,8 +158,7 @@ int main(int argc, char* argv[])
             continue;
         }
 
-        if (image.rows > image.cols)
-        {
+        if (image.rows > image.cols) {
             ++portraitCount;
             continue;
         }
@@ -183,8 +171,7 @@ int main(int argc, char* argv[])
         ++resolutionCounts[resolution];
     }
 
-    if (resolutionCounts.empty())
-    {
+    if (resolutionCounts.empty()) {
         std::cerr << "Error: no landscape calibration images found.\n";
         return 1;
     }
@@ -194,8 +181,7 @@ int main(int argc, char* argv[])
         std::max_element(
             resolutionCounts.begin(),
             resolutionCounts.end(),
-            [](const auto& a, const auto& b)
-            {
+            [](const auto& a, const auto& b) {
                 return a.second < b.second;
             }
         );
@@ -257,15 +243,13 @@ int main(int argc, char* argv[])
     // ------------------------------------------------------------
     // Détection du damier dans chaque image
     // ------------------------------------------------------------
-    for (const fs::path& imagePath : imageFiles)
-    {
+    for (const fs::path& imagePath : imageFiles) {
         cv::Mat image = cv::imread(
             imagePath.string(),
             cv::IMREAD_COLOR
         );
 
-        if (image.empty())
-        {
+        if (image.empty()) {
             std::cout << "[LOAD FAIL] "
                 << imagePath.filename().string()
                 << '\n';
@@ -274,8 +258,7 @@ int main(int argc, char* argv[])
         }
 
         // On n'utilisera que les photos paysage
-        if (image.rows > image.cols)
-        {
+        if (image.rows > image.cols) {
             std::cout << "[PORTRAIT]  "
                 << imagePath.filename().string()
                 << " -> ignored\n";
@@ -285,8 +268,7 @@ int main(int argc, char* argv[])
 
         // Toutes les images doivent avoir exactement la même
         // résolution que celle sélectionnée précédemment.
-        if (image.size() != calibrationImageSize)
-        {
+        if (image.size() != calibrationImageSize) {
             std::cout << "[SIZE SKIP] "
                 << imagePath.filename().string()
                 << " : "
@@ -317,8 +299,7 @@ int main(int argc, char* argv[])
             cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE
         );
 
-        if (!found)
-        {
+        if (!found) {
             std::cout << "[NOT FOUND] "
                 << imagePath.filename().string()
                 << '\n';
@@ -409,8 +390,7 @@ int main(int argc, char* argv[])
 
     // Moins de 5 vues, c'est troop peu pour une calibration solide.
     // Donc on visera plutôt plus de 10 vues.
-    if (acceptedImages < 5)
-    {
+    if (acceptedImages < 5) {
         std::cerr << "Error: not enough valid calibration images.\n";
         return 1;
     }
@@ -486,8 +466,7 @@ int main(int argc, char* argv[])
 
     std::cout << "\n=== Per-view reprojection errors ===\n";
 
-    for (std::size_t i = 0; i < objectPoints.size(); ++i)
-    {
+    for (std::size_t i = 0; i < objectPoints.size(); ++i) {
         std::vector<cv::Point2f> projectedPoints;
 
         cv::projectPoints(
@@ -569,8 +548,7 @@ int main(int argc, char* argv[])
     // --------------------------------------------------------
 
     // Crée automatiquement le dossier parent s'il n'existe pas
-    if (outputPath.has_parent_path())
-    {
+    if (outputPath.has_parent_path()) {
         fs::create_directories(
             outputPath.parent_path()
         );
@@ -583,8 +561,7 @@ int main(int argc, char* argv[])
 
     
 
-    if (!file.isOpened())
-    {
+    if (!file.isOpened()) {
         std::cerr << "Error: could not create "
             << outputPath
             << '\n';

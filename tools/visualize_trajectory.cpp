@@ -13,30 +13,28 @@ namespace fs = std::filesystem;
 
 
 // Une position de caméra enregistrée dans le CSV
-struct TrajectoryPoint
-{
+struct TrajectoryPoint {
 	int frameIndex = 0;
 	double timeSeconds = 0.0;
 
 	double x = 0.0;
 	double y = 0.0;
 	double z = 0.0;
+
+	bool isKeyframe = false;
 };
 
 
 std::string getTrajectoryDisplayName(
 	const fs::path& csvPath
-)
-{
+) {
 	const std::string filename = csvPath.stem().string();
 
-	if (filename.find("map_based") != std::string::npos)
-	{
+	if (filename.find("map_based") != std::string::npos) {
 		return "Map_based monocular VO";
 	}
 
-	if (filename.find("pairwise") != std::string::npos)
-	{
+	if (filename.find("pairwise") != std::string::npos) {
 		return "Pairwise monocular VO";
 	}
 
@@ -55,14 +53,12 @@ std::string getTrajectoryDisplayName(
 }
 
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
 	cv::utils::logging::setLogLevel(
 		cv::utils::logging::LOG_LEVEL_ERROR
 	);
 
-	if (argc < 3)
-	{
+	if (argc < 3) {
 		std::cerr << "Usage: visualize_trajectory "
 				  << "<trajectory_csv> <output_image>\n";
 		return 1;
@@ -82,8 +78,7 @@ int main(int argc, char* argv[])
 	// ------------------------------------------------------------
 	std::ifstream file(inputCsvPath);
 
-	if (!file.is_open())
-	{
+	if (!file.is_open()) {
 		std::cerr << "Error: could not open trajectory file: "
 				  << inputCsvPath
 				  << '\n';
@@ -103,10 +98,8 @@ int main(int argc, char* argv[])
 	// ------------------------------------------------------------
 	// Lecture des positions
 	// ------------------------------------------------------------
-	while (std::getline(file, line))
-	{
-		if (line.empty())
-		{
+	while (std::getline(file, line)) {
+		if (line.empty()) {
 			continue;
 		}
 
@@ -119,22 +112,19 @@ int main(int argc, char* argv[])
 			lineStream,
 			field,
 			','
-		))
-		{
+		)) {
 			fields.push_back(field);
 		}
 
 
 		// Notre CSV contient normalement:
 		// frmae, time, x,  y, z, good_matches, pose_inliers
-		if (fields.size() < 5)
-		{
+		if (fields.size() < 5) {
 			continue;
 		}
 
 
-		try
-		{
+		try {
 			TrajectoryPoint point;
 
 			point.frameIndex = std::stoi(fields[0]);
@@ -143,10 +133,12 @@ int main(int argc, char* argv[])
 			point.y = std::stod(fields[3]);
 			point.z = std::stod(fields[4]);
 
+			if (fields.size() >= 8) {
+				point.isKeyframe = std::stoi(fields[7]) != 0;
+			}
+
 			trajectory.push_back(point);
-		}
-		catch (...)
-		{
+		} catch (...) {
 			std::cerr << "Warning: invalide CSV line ignored:\n"
 					  << line
 					  << '\n';
@@ -157,8 +149,7 @@ int main(int argc, char* argv[])
 	file.close();
 
 
-	if (trajectory.size() < 2)
-	{
+	if (trajectory.size() < 2) {
 		std::cerr << "Error: not enough trajectory points.\n";
 		return 1;
 	}
@@ -167,6 +158,18 @@ int main(int argc, char* argv[])
 			  << trajectory.size()
 			  <<  '\n';
 
+	const std::size_t keyframeCount = 
+		static_cast<std::size_t>(
+			std::count_if(
+				trajectory.begin(), trajectory.end(), [](const TrajectoryPoint& point) {
+					return point.isKeyframe;
+				}
+			)
+		);
+
+	std::cout << "Keyframes: "
+			  << keyframeCount
+			  << '\n';
 	// ------------------------------------------------------------
 	// Bornes de la trajectoire dans le plan X-Z
 	// 
@@ -186,8 +189,7 @@ int main(int argc, char* argv[])
 	double maxZ = trajectory.front().z;
 
 
-	for (const TrajectoryPoint& point : trajectory)
-	{
+	for (const TrajectoryPoint& point : trajectory) {
 		minX = std::min(minX, point.x);
 		maxX = std::max(maxX, point.x);
 
@@ -204,8 +206,7 @@ int main(int argc, char* argv[])
 	// ------------------------------------------------------------
 	double pathLength = 0.0;
 
-	for (std::size_t i = 1; i < trajectory.size(); ++i)
-	{
+	for (std::size_t i = 1; i < trajectory.size(); ++i) {
 		const double dx = trajectory[i].x - trajectory[i - 1].x;
 		const double dy = trajectory[i].y - trajectory[i - 1].y;
 		const double dz = trajectory[i].z - trajectory[i - 1].z;
@@ -261,13 +262,11 @@ int main(int argc, char* argv[])
 
 	// Evite une division par zéro si la trajectoire est quasiment 
 	// parfaitement droite sur un axe
-	if (rangeX < 1e-9)
-	{
+	if (rangeX < 1e-9) {
 		rangeX = 1.0;
 	}
 
-	if (rangeZ < 1e-9)
-	{
+	if (rangeZ < 1e-9) {
 		rangeZ = 1.0;
 	}
 
@@ -297,8 +296,7 @@ int main(int argc, char* argv[])
 	// de la trajectoire.
 	// --------------------------------------------------------------
 	auto worldToImage = 
-		[&](double x, double z)
-		{
+		[&](double x, double z) {
 			const int pixelX =
 				static_cast<int>(
 					offsetX + (x - minX) * scale
@@ -315,8 +313,7 @@ int main(int argc, char* argv[])
 	// --------------------------------------------------------------
 	// Dessin de la trajectoire
 	// --------------------------------------------------------------
-	for (std::size_t i = 1; i < trajectory.size(); ++i)
-	{
+	for (std::size_t i = 1; i < trajectory.size(); ++i) {
 		const cv::Point previous = 
 			worldToImage(
 				trajectory[i-1].x,
@@ -339,12 +336,30 @@ int main(int argc, char* argv[])
 		);
 
 		cv::circle(
-			visualization,
-			current,
-			3,
-			cv::Scalar(0, 0, 0),
-			cv::FILLED,
-			cv::LINE_AA
+			visualization, current, 3,
+			cv::Scalar(0, 0, 0), cv::FILLED, cv::LINE_AA
+		);
+	}
+
+	// --------------------------------------------------------------
+	// Keyframes
+	//
+	// Elles sont affichées avec un marqueur plus grand afin de
+	// visualiser où le système a décidé de renouveler sa référence.
+	// --------------------------------------------------------------
+	for (const TrajectoryPoint& point : trajectory) {
+		if (!point.isKeyframe){
+			continue;
+		}
+
+		const cv::Point keyframePoint =
+			worldToImage(
+				point.x, point.z
+			);
+
+		cv::circle(
+			visualization, keyframePoint, 6,
+			cv::Scalar(255, 0, 0), cv::FILLED, cv::LINE_AA
 		);
 	}
 
@@ -353,56 +368,40 @@ int main(int argc, char* argv[])
 	// --------------------------------------------------------------
 	const cv::Point startPoint = 
 		worldToImage(
-			trajectory.front().x,
-			trajectory.front().z
+			trajectory.front().x, trajectory.front().z
 		);
 
 	const cv::Point endPoint =
 		worldToImage(
-			trajectory.back().x,
-			trajectory.back().z
+			trajectory.back().x, trajectory.back().z
 		);
 
 	// Vert = départ
 	cv::circle(
-		visualization,
-		startPoint,
-		9,
-		cv::Scalar(0, 180, 0),
-		cv::FILLED,
-		cv::LINE_AA
+		visualization, startPoint, 9,
+		cv::Scalar(0, 180, 0), cv::FILLED, cv::LINE_AA
 	);
 
 	// Rouge = arrivée
 	cv::circle(
-		visualization,
-		endPoint,
-		9,
-		cv::Scalar(0, 0, 200),
-		cv::FILLED,
-		cv::LINE_AA
+		visualization, endPoint, 9,
+		cv::Scalar(0, 0, 200), cv::FILLED, cv::LINE_AA
 	);
 
 
 	cv::putText(
-		visualization,
-		"START",
+		visualization, "START",
 		startPoint + cv::Point(12, -10),
-		cv::FONT_HERSHEY_SIMPLEX,
-		0.7,
-		cv::Scalar(0, 120, 0),
-		2,
+		cv::FONT_HERSHEY_SIMPLEX, 0.7,
+		cv::Scalar(0, 120, 0), 2,
 		cv::LINE_AA
 	);
 
 	cv::putText(
-		visualization,
-		"END",
+		visualization, "END",
 		endPoint + cv::Point(12, -10),
-		cv::FONT_HERSHEY_SIMPLEX,
-		0.7,
-		cv::Scalar(0, 0, 180),
-		2,
+		cv::FONT_HERSHEY_SIMPLEX, 0.7,
+		cv::Scalar(0, 0, 180), 2,
 		cv::LINE_AA
 	);
 
@@ -417,22 +416,38 @@ int main(int argc, char* argv[])
 		cv::LINE_AA
 	);
 
+	if (keyframeCount > 0) {
+		cv::circle(
+			visualization,
+			cv::Point(35, 65),
+			6,
+			cv::Scalar(255, 0, 0),
+			cv::FILLED,
+			cv::LINE_AA
+		);
+
+		cv::putText(
+			visualization,
+			"Keyframe",
+			cv::Point(50, 72),
+			cv::FONT_HERSHEY_SIMPLEX,
+			0.55,
+			cv::Scalar(0, 0, 0),
+			1,
+			cv::LINE_AA
+		);
+	}
 
 	// --------------------------------------------------------------
 	// Sauvegarde
 	// --------------------------------------------------------------
-	if (outputImagePath.has_parent_path())
-	{
+	if (outputImagePath.has_parent_path()) {
 		fs::create_directories(
 			outputImagePath.parent_path()
 		);
 	}
 
-	if (!cv::imwrite(
-		outputImagePath.string(),
-		visualization
-	))
-	{
+	if (!cv::imwrite(outputImagePath.string(), visualization)) {
 		std::cerr << "Error: could not save trajectory image.\n";
 		return 1;
 	}
@@ -441,10 +456,163 @@ int main(int argc, char* argv[])
 			  << outputImagePath.string()
 			  << '\n';
 
+	// --------------------------------------------------------------
+	// Visualisation de l'évolution de Y
+	//
+	// Cette figure ne représente pas une erreur absolue.
+	// Elle montre simplement l'évolution de la coordonnée verticale
+	// estimée par le VO au cours de la séquence.
+	// --------------------------------------------------------------
+	const int yPlotWidth = 1000;
+	const int yPlotHeight = 500;
+	const int yPlotMargin = 70;
+
+	cv::Mat yVisualization(
+		yPlotHeight, yPlotWidth,
+		CV_8UC3, cv::Scalar(255, 255, 255)
+	);
+
+	const int minimumFrame = trajectory.front().frameIndex;
+
+	const int maximumFrame = trajectory.back().frameIndex;
+
+	double frameRange =
+		static_cast<double>(maximumFrame - minimumFrame);
+
+	double yRange = maxY - minY;
+
+	if (frameRange < 1e-9) {
+		frameRange = 1.0;
+	}
+
+	if (yRange < 1e-9) {
+		yRange = 1.0;
+	}
+
+	const double frameScale = static_cast<double>(yPlotWidth - 2 * yPlotMargin) / frameRange;
+	const double yScale = static_cast<double>(yPlotHeight - 2 * yPlotMargin) / yRange;
+
+	auto frameAndYToImage = [&](int frameIndex, double y) {
+		const int pixelX = static_cast<int>(yPlotMargin + (frameIndex - minimumFrame) * frameScale);
+		const int pixelY = static_cast<int>(yPlotHeight - (yPlotMargin + (y - minY) * yScale));
+
+		return cv::Point(pixelX, pixelY);
+	};
+
+	for (std::size_t i = 1; i < trajectory.size(); ++i) {
+		const cv::Point previous = frameAndYToImage(trajectory[i - 1].frameIndex, trajectory[i - 1].y);
+		const cv::Point current = frameAndYToImage(trajectory[i].frameIndex, trajectory[i].y);
+
+		cv::line(
+			yVisualization,
+			previous,
+			current,
+			cv::Scalar(80, 80, 80),
+			2,
+			cv::LINE_AA
+		);
+
+		cv::circle(
+			yVisualization,
+			current,
+			3,
+			cv::Scalar(0, 0, 0),
+			cv::FILLED,
+			cv::LINE_AA
+		);
+	}
+
+	const cv::Point yStartPoint = frameAndYToImage(trajectory.front().frameIndex, trajectory.front().y);
+	const cv::Point yEndPoint = frameAndYToImage(trajectory.back().frameIndex, trajectory.back().y);
+
+	cv::circle(
+		yVisualization,
+		yStartPoint,
+		8,
+		cv::Scalar(0, 180, 0),
+		cv::FILLED,
+		cv::LINE_AA
+	);
+
+	cv::circle(
+		yVisualization,
+		yEndPoint,
+		8,
+		cv::Scalar(0, 0, 200),
+		cv::FILLED,
+		cv::LINE_AA
+	);
+
+	cv::putText(
+		yVisualization,
+		trajectoryDisplayName +
+		" - Y evolution",
+		cv::Point(25, 35),
+		cv::FONT_HERSHEY_SIMPLEX,
+		0.8,
+		cv::Scalar(0, 0, 0),
+		2,
+		cv::LINE_AA
+	);
+
+	cv::putText(
+		yVisualization,
+		"Y",
+		cv::Point(20, 80),
+		cv::FONT_HERSHEY_SIMPLEX,
+		0.6,
+		cv::Scalar(0, 0, 0),
+		1,
+		cv::LINE_AA
+	);
+
+	cv::putText(
+		yVisualization,
+		"frame",
+		cv::Point(
+			yPlotWidth - 90,
+			yPlotHeight - 20
+		),
+		cv::FONT_HERSHEY_SIMPLEX,
+		0.6,
+		cv::Scalar(0, 0, 0),
+		1,
+		cv::LINE_AA
+	);
+
+	const fs::path yOutputImagePath =
+		outputImagePath.parent_path() /
+		(
+			outputImagePath.stem().string() +
+			"_y_drift" +
+			outputImagePath.extension().string()
+			);
+
+	if (!cv::imwrite(
+		yOutputImagePath.string(),
+		yVisualization
+	))
+	{
+		std::cerr
+			<< "Error: could not save Y evolution image.\n";
+
+		return 1;
+	}
+
+	std::cout
+		<< "Y evolution visualization saved to: "
+		<< yOutputImagePath.string()
+		<< '\n';
+
 	// Affichage à l'écran
 	cv::imshow(
 		trajectoryDisplayName,
 		visualization
+	);
+
+	cv::imshow(
+		trajectoryDisplayName + " - Y evolution",
+		yVisualization
 	);
 
 	cv::waitKey(0);

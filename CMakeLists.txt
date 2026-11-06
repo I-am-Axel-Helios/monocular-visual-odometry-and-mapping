@@ -120,9 +120,24 @@ target_link_libraries(
         ${OpenCV_LIBS}
 )
 
+# ------------------------------------------------------------
+# Trajectory comparison utility
+# ------------------------------------------------------------
+add_executable(
+    compare_trajectories
+    tools/compare_trajectories.cpp
+)
+
+target_link_libraries(
+    compare_trajectories
+    PRIVATE
+        ${OpenCV_LIBS}
+        Eigen3::Eigen
+)
+
 
 # ------------------------------------------------------------
-# Map-based monocular visaul odometry
+# Map-based monocular visual odometry
 # ------------------------------------------------------------
 add_executable(
     map_visual_odometry
