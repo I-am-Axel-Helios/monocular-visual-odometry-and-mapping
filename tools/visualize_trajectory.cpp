@@ -22,6 +22,8 @@ struct TrajectoryPoint {
 	double z = 0.0;
 
 	bool isKeyframe = false;
+
+	int segmentId = 0;
 };
 
 
@@ -137,6 +139,10 @@ int main(int argc, char* argv[]) {
 				point.isKeyframe = std::stoi(fields[7]) != 0;
 			}
 
+			if (fields.size() >= 9) {
+				point.segmentId = std::stoi(fields[8]);
+			}
+
 			trajectory.push_back(point);
 		} catch (...) {
 			std::cerr << "Warning: invalide CSV line ignored:\n"
@@ -170,6 +176,20 @@ int main(int argc, char* argv[]) {
 	std::cout << "Keyframes: "
 			  << keyframeCount
 			  << '\n';
+
+	int segmentCount = 1;
+
+	for (std::size_t i = 1; i < trajectory.size(); ++i) {
+
+		if (trajectory[i].segmentId != trajectory[i - 1].segmentId) {
+			++segmentCount;
+		}
+	}
+
+	std::cout << "Trajectory segments: "
+		<< segmentCount
+		<< '\n';
+
 	// ------------------------------------------------------------
 	// Bornes de la trajectoire dans le plan X-Z
 	// 
@@ -207,6 +227,11 @@ int main(int argc, char* argv[]) {
 	double pathLength = 0.0;
 
 	for (std::size_t i = 1; i < trajectory.size(); ++i) {
+
+		if (trajectory[i].segmentId != trajectory[i - 1].segmentId) {
+			continue;
+		}
+
 		const double dx = trajectory[i].x - trajectory[i - 1].x;
 		const double dy = trajectory[i].y - trajectory[i - 1].y;
 		const double dz = trajectory[i].z - trajectory[i - 1].z;
@@ -225,13 +250,17 @@ int main(int argc, char* argv[]) {
 			endDz * endDz
 		);
 
-	std::cout << "Accumulated path length: "
+	std::cout << "Accumulated within-segment path length: "
 			  << pathLength
 			  << " arbitrary units\n";
 
-	std::cout << "Start-to-end displacement: "
-			  << endDisplacement
-			  << " arbitrary units\n";
+	if (segmentCount == 1) {
+		std::cout << "Start-to-end displacement: "
+				  << endDisplacement
+				  << " arbitrary units\n";
+	} else {
+		std::cout << "Start-to-end displacement: not reported for multi - segment trajectory\n";
+	}
 
 	std::cout << "Y range: "
 			  << minY
@@ -314,6 +343,7 @@ int main(int argc, char* argv[]) {
 	// Dessin de la trajectoire
 	// --------------------------------------------------------------
 	for (std::size_t i = 1; i < trajectory.size(); ++i) {
+
 		const cv::Point previous = 
 			worldToImage(
 				trajectory[i-1].x,
@@ -326,18 +356,58 @@ int main(int argc, char* argv[]) {
 				trajectory[i].z
 			);
 
-		cv::line(
-			visualization,
-			previous,
-			current,
-			cv::Scalar(80, 80, 80),
-			2,
-			cv::LINE_AA
-		);
+		const bool sameSegment = trajectory[i].segmentId == trajectory[i - 1].segmentId;
+
+		if (sameSegment) {
+			cv::line(
+				visualization,
+				previous,
+				current,
+				cv::Scalar(80, 80, 80),
+				2,
+				cv::LINE_AA
+			);
+		}
 
 		cv::circle(
 			visualization, current, 3,
 			cv::Scalar(0, 0, 0), cv::FILLED, cv::LINE_AA
+		);
+	}
+
+	for (std::size_t i = 0; i < trajectory.size(); ++i) {
+		const bool isSegmentStart =
+			i == 0 || trajectory[i].segmentId != trajectory[i - 1].segmentId;
+
+		if (!isSegmentStart) {
+			continue;
+		}
+
+		const cv::Point segmentStart =
+			worldToImage(
+				trajectory[i].x,
+				trajectory[i].z
+			);
+
+		cv::circle(
+			visualization,
+			segmentStart,
+			7,
+			cv::Scalar(0, 140, 255),
+			cv::FILLED,
+			cv::LINE_AA
+		);
+
+
+		cv::putText(
+			visualization,
+			"S" + std::to_string(trajectory[i].segmentId),
+			segmentStart + cv::Point(10, -8),
+			cv::FONT_HERSHEY_SIMPLEX,
+			0.55,
+			cv::Scalar(0, 100, 180),
+			2,
+			cv::LINE_AA
 		);
 	}
 
@@ -502,15 +572,18 @@ int main(int argc, char* argv[]) {
 	for (std::size_t i = 1; i < trajectory.size(); ++i) {
 		const cv::Point previous = frameAndYToImage(trajectory[i - 1].frameIndex, trajectory[i - 1].y);
 		const cv::Point current = frameAndYToImage(trajectory[i].frameIndex, trajectory[i].y);
+		const bool sameSegment = trajectory[i].segmentId == trajectory[i - 1].segmentId;
 
-		cv::line(
-			yVisualization,
-			previous,
-			current,
-			cv::Scalar(80, 80, 80),
-			2,
-			cv::LINE_AA
-		);
+		if (sameSegment) {
+			cv::line(
+				yVisualization,
+				previous,
+				current,
+				cv::Scalar(80, 80, 80),
+				2,
+				cv::LINE_AA
+			);
+		}
 
 		cv::circle(
 			yVisualization,

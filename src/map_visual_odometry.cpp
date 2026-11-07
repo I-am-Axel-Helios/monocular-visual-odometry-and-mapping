@@ -2695,7 +2695,8 @@ int main(int argc, char* argv[]) {
                    << "z, "
                    << "good_matches,"
                    << "pose_inliers,"
-                   << "is_keyframe\n";
+                   << "is_keyframe,"
+                   << "segment_id\n";
 
 
     // ------------------------------------------------------------
@@ -2895,8 +2896,134 @@ int main(int argc, char* argv[]) {
     // monoculaires, pas des mètres
     const double minimumMaximumNormalizedStep = 0.5;
 
+    // ----------------------------------------------------------------------
+    // Etat du tracking 
+    // 
+    // On considère le tracking comme perdu après plusieurs frames
+    // sélectionées consécutives pour lesquelles la localisation par rapport
+    // à la carte a échoué.
+    // 
+    // Pour  cette première étape A10, TRACKING LOST est seulement
+    // diagnostique : aucune carte n'est encore supprimée ou recréée.
+    // -----------------------------------------------------------------------
+    int consecutiveTrackingFailures = 0;
+    int longestTrackingFailureStreak = 0;
+    int trackingLossEvents = 0;
+    int recoveryGeometryAttempts = 0;
+    int usableRecoveryGeometryCandidates = 0;
+    int recovery3DValidationAttempts = 0;
+    int validRecoveryBootstrapCandidates = 0;
+    int recoveryConfirmationEvents = 0;
+    int lastValidRecoveryBootstrapFrameIndex = -1;
+    int recoveryRebootstrapEvents = 0;
+    int trajectorySegmentId = 0;
+    int stableRecoveryRebootstrapEvents = 0;
+    int unstableRecoveryRebootstrapEvents = 0;
+    int recoveryPostValidationSuccessfulPnP = 0;
+    int recoveryPostValidationSegmentId = -1;
 
-        
+    bool recoveryPostValidationPending = false;
+    bool recoveryBootstrapConfirmed = false;
+
+    const int requiredSuccessfulPnPForStableRecovery = 2;
+    const int maximumRecoveryConfirmationGapFrames = 4 * frameStep;
+
+    // Référence locale utilisée uniquement pendant TRACKING LOST.
+    //
+    // Elle est indépendante de previousKeypoints/Descriptors,
+    // qui restent associés à la dernière pose globale fiable.
+    std::vector<cv::KeyPoint> recoveryReferenceKeypoints;
+    cv::Mat recoveryReferenceDescriptors;
+
+    int recoveryReferenceFrameIndex = -1;
+
+    bool recoveryReferenceInitialized = false;
+    bool trackingLost = false;
+
+    const int trackingLossFailureThreshold = 4;
+
+    auto registerTrackingFailure = [&](int failedFrameIndex, const char* reason) {
+
+        ++consecutiveTrackingFailures;
+
+        if (recoveryPostValidationPending && recoveryPostValidationSuccessfulPnP > 0) {
+            recoveryPostValidationSuccessfulPnP = 0;
+
+            std::cout << "[RECOVERY VALIDATION RESET] segment "
+                      << recoveryPostValidationSegmentId
+                      << " | frame: "
+                      << failedFrameIndex
+                      << " | reason: "
+                      << reason
+                      << '\n';
+        }
+
+        longestTrackingFailureStreak = std::max(longestTrackingFailureStreak, consecutiveTrackingFailures);
+
+        std::cout << "[TRACKING FAILURE] frame "
+                  << failedFrameIndex
+                  << " | consecutive: "
+                  << consecutiveTrackingFailures
+                  << "/"
+                  << trackingLossFailureThreshold
+                  << " | reason: "
+                  << reason
+                  << '\n';
+
+        if (!trackingLost && consecutiveTrackingFailures >= trackingLossFailureThreshold) {
+            trackingLost = true;
+
+            if (recoveryPostValidationPending) {
+                ++unstableRecoveryRebootstrapEvents;
+
+                std::cout << "[RECOVERY UNSTABLE] segment "
+                          << recoveryPostValidationSegmentId
+                          << " | tracking lost again at frame "
+                          << failedFrameIndex
+                          << '\n';
+
+
+                recoveryPostValidationPending = false;
+                recoveryPostValidationSuccessfulPnP = 0;
+                recoveryPostValidationSegmentId = -1;
+            }
+
+            lastValidRecoveryBootstrapFrameIndex = -1;
+            recoveryBootstrapConfirmed = false;
+
+            ++trackingLossEvents;
+
+            std::cout << "[TRACKING LOST] frame "
+                      << failedFrameIndex
+                      << " | consecutive failures: "
+                      << consecutiveTrackingFailures
+                      << '\n';
+        }
+    };
+
+    auto registerTrackingSuccess = [&](int successfulFrameIndex) {
+        if (trackingLost) {
+            std::cout << "[TRACKING RECOVERED] frame "
+                      << successfulFrameIndex
+                      << " | previous failure streak: "
+                      << consecutiveTrackingFailures
+                      << '\n';
+        }
+
+        consecutiveTrackingFailures = 0;
+        trackingLost = false;
+
+        recoveryReferenceKeypoints.clear();
+        recoveryReferenceDescriptors.release();
+
+        lastValidRecoveryBootstrapFrameIndex = -1;
+        recoveryBootstrapConfirmed = false;
+
+        recoveryReferenceFrameIndex = -1;
+        recoveryReferenceInitialized = false;
+    };
+
+
     // ------------------------------------------------------------
     // Lecture séquentielle de la vidéo
     // ------------------------------------------------------------
@@ -2948,6 +3075,10 @@ int main(int argc, char* argv[]) {
                       << frameIndex
                       << " : no descriptors\n";
 
+            if (mapInitialized) {
+                registerTrackingFailure(frameIndex, "no descriptors");
+            }
+
             ++frameIndex;
             continue;
         }
@@ -2962,7 +3093,9 @@ int main(int argc, char* argv[]) {
             trajectoryFile << frameIndex
                            << ","
                            << static_cast<double>(frameIndex) / fps
-                           << ",0,0,0,0,0,0\n";
+                           << ",0,0,0,0,0,0,"
+                           << trajectorySegmentId
+                           << '\n';
 
             std::cout << "[INIT] frame "
                       << frameIndex
@@ -2974,6 +3107,719 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+
+        auto tryRecoveryGeometry = [&](const char* triggerReason) {
+            
+            if (!mapInitialized || !trackingLost || currentDescriptors.empty()) {
+                return;
+            }
+
+            // Première tentative après passage à TRACKING LOST:
+            // la référence initiale est la dernière frame dont la pose globale était connue.
+            if (!recoveryReferenceInitialized) {
+
+                if (previousDescriptors.empty() || previousKeypoints.empty()) {
+                    return;
+                }
+
+                recoveryReferenceKeypoints = previousKeypoints;
+                recoveryReferenceDescriptors = previousDescriptors.clone();
+                recoveryReferenceFrameIndex = lastAcceptedPoseFrameIndex;
+                recoveryReferenceInitialized = true;
+
+                std::cout << "[RECOVERY REFERENCE INIT] frame "
+                          << recoveryReferenceFrameIndex
+                          << '\n';
+            }
+
+            auto advanceRecoveryReference = [&]() {
+                recoveryReferenceKeypoints = currentKeypoints;
+                recoveryReferenceDescriptors = currentDescriptors.clone();
+                recoveryReferenceFrameIndex = frameIndex;
+            };
+
+            ++recoveryGeometryAttempts;
+
+            // Matching dernière pose connue -> frame courante
+            std::vector<std::vector<cv::DMatch>> recoveryKnnMatches;
+
+            matcher.knnMatch(
+                recoveryReferenceDescriptors, currentDescriptors,
+                recoveryKnnMatches, 2
+            );
+
+            std::vector<cv::DMatch> recoveryCandidateMatches;
+
+            for (const auto& candidates : recoveryKnnMatches) {
+
+                if (candidates.size() < 2) {
+                    continue;
+                }
+
+                if (candidates[0].distance < ratioThreshold * candidates[1].distance) {
+                    recoveryCandidateMatches.push_back(candidates[0]);
+                }
+            }
+
+            // On privilégie les meilleurs matches avant de supprimer les duplications éventuelles côté image courante.
+            std::sort(
+                recoveryCandidateMatches.begin(), recoveryCandidateMatches.end(),
+                [](const cv::DMatch& a, const cv::DMatch& b) {
+                    return a.distance < b.distance; 
+                }
+            );
+
+            std::vector<bool> recoveryCurrentKeypointAlreadyUsed(
+                currentKeypoints.size(), false
+            );
+
+            std::vector<cv::DMatch> recoveryGoodMatches;
+            recoveryGoodMatches.reserve(recoveryCandidateMatches.size());
+
+            for (const cv::DMatch& match : recoveryCandidateMatches) {
+
+                if (recoveryCurrentKeypointAlreadyUsed[match.trainIdx]) {
+                    continue;
+                }
+                
+                recoveryCurrentKeypointAlreadyUsed[match.trainIdx] = true;
+                recoveryGoodMatches.push_back(match);
+            }
+
+            if (recoveryGoodMatches.size() < 20) {
+                std::cout << "[RECOVERY GEOMETRY] reference: "
+                          << recoveryReferenceFrameIndex
+                          << " -> current: "
+                          << frameIndex
+                          << " | matches: "
+                          << recoveryGoodMatches.size()
+                          << " | usable: no"
+                          << " | reason: insufficient matches"
+                          << " | trigger: "
+                          << triggerReason
+                          << '\n';
+
+                advanceRecoveryReference();
+                return;
+            }
+
+            // Points correspondants
+            std::vector<cv::Point2f> recoveryPreviousPoints;
+            std::vector<cv::Point2f> recoveryCurrentPoints;
+
+            recoveryPreviousPoints.reserve(recoveryGoodMatches.size());
+            recoveryCurrentPoints.reserve(recoveryGoodMatches.size());
+
+            for (const cv::DMatch& match : recoveryGoodMatches) {
+                
+                recoveryPreviousPoints.push_back(recoveryReferenceKeypoints[match.queryIdx].pt);
+                recoveryCurrentPoints.push_back(currentKeypoints[match.trainIdx].pt);
+            }
+
+            // Undistortion
+            std::vector<cv::Point2f> recoveryPreviousUndistorted;
+            std::vector<cv::Point2f> recoveryCurrentUndistorted;
+
+            cv::undistortPoints(
+                recoveryPreviousPoints, recoveryPreviousUndistorted,
+                cameraMatrix, distortionCoefficients,
+                cv::noArray(), cameraMatrix
+            );
+
+            cv::undistortPoints(
+                recoveryCurrentPoints, recoveryCurrentUndistorted,
+                cameraMatrix, distortionCoefficients,
+                cv::noArray(), cameraMatrix
+            );
+
+            // Matrice essentielle
+            cv::Mat recoveryEssentialMask;
+
+            const cv::Mat recoveryEssentialMatrix = 
+                cv::findEssentialMat(
+                    recoveryPreviousUndistorted, recoveryCurrentUndistorted,
+                    cameraMatrix, cv::RANSAC,
+                    0.999, 1.0, recoveryEssentialMask
+                );
+
+            if (recoveryEssentialMatrix.empty()) {
+                std::cout << "[RECOVERY GEOMETRY] reference: "
+                          << recoveryReferenceFrameIndex
+                          << " -> current: "
+                          << frameIndex
+                          << " | matches: "
+                          << recoveryGoodMatches.size()
+                          << " | usable: no"
+                          << " | reason: essential matrix failed"
+                          << '\n';
+
+                advanceRecoveryReference();
+                return;
+            }
+
+            // Pose relative
+            cv::Mat recoveryRotation;
+            cv::Mat recoveryTranslation;
+
+            cv::Mat recoveryPoseMask = recoveryEssentialMask.clone();
+
+            const int recoveryPoseInliers = 
+                cv::recoverPose(
+                    recoveryEssentialMatrix,
+                    recoveryPreviousUndistorted, recoveryCurrentUndistorted,
+                    cameraMatrix,
+                    recoveryRotation, recoveryTranslation,
+                    recoveryPoseMask
+                );
+
+            const double recoveryInlierRatio = 
+                static_cast<double>(recoveryPoseInliers) / static_cast<double>(recoveryGoodMatches.size());
+
+            const bool recoveryGeometryUsable = recoveryPoseInliers >= 15 && recoveryInlierRatio >= 0.40;
+
+            std::cout << "[RECOVERY GEOMETRY] reference: "
+                      << recoveryReferenceFrameIndex
+                      << " -> current: "
+                      << frameIndex
+                      << " | matches: "
+                      << recoveryGoodMatches.size()
+                      << " | pose inliers: "
+                      << recoveryPoseInliers
+                      << " | ratio: "
+                      << recoveryInlierRatio
+                      << " | usable: "
+                      << (recoveryGeometryUsable ? "yes" : "no")
+                      << " | trigger: "
+                      << triggerReason
+                      << '\n';
+
+            if (!recoveryGeometryUsable) {
+                advanceRecoveryReference();
+                return;
+            }
+
+            ++usableRecoveryGeometryCandidates;
+            ++recovery3DValidationAttempts;
+
+            std::vector<cv::Point2f> recoveryInlierPreviousPoints;
+            std::vector<cv::Point2f> recoveryInlierCurrentPoints;
+
+            std::vector<cv::DMatch> recoveryInlierMatches;
+
+            recoveryInlierPreviousPoints.reserve(recoveryPoseInliers);
+            recoveryInlierCurrentPoints.reserve(recoveryPoseInliers);
+            recoveryInlierMatches.reserve(recoveryPoseInliers);
+
+
+            for (std::size_t i = 0; i < recoveryGoodMatches.size(); ++i) {
+                if (recoveryPoseMask.at<uchar>(static_cast<int>(i)) == 0) {
+                    continue;
+                }
+
+                recoveryInlierPreviousPoints.push_back(recoveryPreviousUndistorted[i]);
+                recoveryInlierCurrentPoints.push_back(recoveryCurrentUndistorted[i]);
+                recoveryInlierMatches.push_back(recoveryGoodMatches[i]);
+            }
+
+            // ------------------------------------------------------------
+            // Validation 3D du candidat de re-bootstrap
+            // ------------------------------------------------------------
+            const double minimumRecoveryParallaxDegrees = 0.25;
+            const double maximumRecoveryReprojectionError = 2.0;
+            const int minimumRecoveryValid3DPoints = 30;
+            const double minimumRecoveryValid3DRatio = 0.50;
+
+            // Première caméra locale : [I | 0]
+            cv::Mat recoveryFirstCameraPose = cv::Mat::zeros(3, 4, CV_64F);
+            cv::Mat recoveryIdentity = cv::Mat::eye(3, 3, CV_64F);
+
+            recoveryIdentity.copyTo(recoveryFirstCameraPose(cv::Rect(0, 0, 3, 3)));
+
+
+            // Deuxième caméra locale : [R | t]
+            cv::Mat recoverySecondCameraPose;
+
+            cv::hconcat(
+                recoveryRotation, recoveryTranslation,
+                recoverySecondCameraPose
+            );
+
+
+            const cv::Mat recoveryProjection1 = cameraMatrix * recoveryFirstCameraPose;
+            const cv::Mat recoveryProjection2 = cameraMatrix * recoverySecondCameraPose;
+
+
+            // Triangulation
+            cv::Mat recoveryHomogeneousPoints4D;
+
+            cv::triangulatePoints(
+                recoveryProjection1, recoveryProjection2,
+                recoveryInlierPreviousPoints, recoveryInlierCurrentPoints,
+                recoveryHomogeneousPoints4D
+            );
+
+
+            cv::Mat recoveryHomogeneousPoints4D64;
+            recoveryHomogeneousPoints4D.convertTo(recoveryHomogeneousPoints4D64, CV_64F);
+
+
+            // Centres caméra dans le repère local de la première caméra
+            const cv::Mat recoveryCameraCenter1 = cv::Mat::zeros(3, 1, CV_64F);
+            const cv::Mat recoveryCameraCenter2 = -recoveryRotation.t() * recoveryTranslation;
+
+
+            // Validation des points 3D
+            int recoveryValid3DPoints = 0;
+            int recoveryLowParallaxRejected = 0;
+            int recoveryReprojectionRejected = 0;
+
+            std::vector<double> recoveryParallaxAngles;
+            std::vector<cv::Point3f>recoveryBootstrapMapPoints;
+
+            cv::Mat recoveryBootstrapMapDescriptors;
+
+            std::vector<int> recoveryBootstrapReferenceMapPointIndices(recoveryReferenceKeypoints.size(), -1);
+            std::vector<int> recoveryBootstrapCurrentMapPointIndices(currentKeypoints.size(), -1);
+
+            recoveryBootstrapMapPoints.reserve(recoveryInlierMatches.size());
+
+            for (int i = 0; i < recoveryHomogeneousPoints4D64.cols; ++i) {
+
+                const double w = recoveryHomogeneousPoints4D64.at<double>(3, i);
+
+                if (std::abs(w) < 1e-9) {
+                    continue;
+                }
+
+                const double x = recoveryHomogeneousPoints4D64.at<double>(0, i) / w;
+                const double y = recoveryHomogeneousPoints4D64.at<double>(1, i) / w;
+                const double z = recoveryHomogeneousPoints4D64.at<double>(2, i) / w;
+
+
+                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+                    continue;
+                }
+
+
+                cv::Mat pointCamera1 =
+                    (cv::Mat_<double>(3, 1)
+                        << x, y, z);
+
+                cv::Mat pointCamera2 = recoveryRotation * pointCamera1 + recoveryTranslation;
+
+
+                // Le point doit être devant les deux caméras.
+                if (pointCamera1.at<double>(2, 0) <= 0.0 || pointCamera2.at<double>(2, 0) <= 0.0) {
+                    continue;
+                }
+
+
+                // --------------------------------------------------------
+                // Parallaxe
+                // --------------------------------------------------------
+                const cv::Mat ray1 = pointCamera1 - recoveryCameraCenter1;
+                const cv::Mat ray2 = pointCamera1 - recoveryCameraCenter2;
+
+
+                const double ray1Norm = cv::norm(ray1);
+                const double ray2Norm = cv::norm(ray2);
+
+                if (ray1Norm < 1e-9 || ray2Norm < 1e-9) {
+                    continue;
+                }
+
+
+                double cosineAngle = ray1.dot(ray2) / (ray1Norm * ray2Norm);
+                cosineAngle = std::clamp(cosineAngle, -1.0, 1.0);
+
+                const double parallaxDegrees =std::acos(cosineAngle) * 180.0 / CV_PI;
+
+                recoveryParallaxAngles.push_back(parallaxDegrees);
+
+                if (parallaxDegrees < minimumRecoveryParallaxDegrees) {
+
+                    ++recoveryLowParallaxRejected;
+                    continue;
+                }
+
+
+                // Reprojection première caméra
+                cv::Mat projected1 = cameraMatrix * pointCamera1;
+
+                const cv::Point2d reprojection1(
+                    projected1.at<double>(0, 0) / projected1.at<double>(2, 0),
+                    projected1.at<double>(1, 0) / projected1.at<double>(2, 0)
+                );
+
+
+                // Reprojection deuxième caméra
+                cv::Mat projected2 = cameraMatrix * pointCamera2;
+
+                const cv::Point2d reprojection2(
+                    projected2.at<double>(0, 0) / projected2.at<double>(2, 0),
+                    projected2.at<double>(1, 0) / projected2.at<double>(2, 0)
+                );
+
+                const double reprojectionError1 = cv::norm(reprojection1 - cv::Point2d(recoveryInlierPreviousPoints[i]));
+                const double reprojectionError2 = cv::norm(reprojection2 - cv::Point2d(recoveryInlierCurrentPoints[i]));
+
+
+                if (reprojectionError1 > maximumRecoveryReprojectionError ||
+                    reprojectionError2 > maximumRecoveryReprojectionError) {
+
+                    ++recoveryReprojectionRejected;
+                    continue;
+                }
+
+                const cv::DMatch& recoveryMatch = recoveryInlierMatches[i];
+                const int recoveryMapPointIndex = static_cast<int>(recoveryBootstrapMapPoints.size());
+
+
+                recoveryBootstrapMapPoints.emplace_back(
+                    static_cast<float>(x),
+                    static_cast<float>(y),
+                    static_cast<float>(z)
+                );
+
+                recoveryBootstrapMapDescriptors.push_back(currentDescriptors.row(recoveryMatch.trainIdx));
+
+                recoveryBootstrapReferenceMapPointIndices[recoveryMatch.queryIdx] = recoveryMapPointIndex;
+                recoveryBootstrapCurrentMapPointIndices[recoveryMatch.trainIdx] = recoveryMapPointIndex;
+
+                ++recoveryValid3DPoints;
+            }
+
+
+            // Parallaxe médiane
+            double recoveryMedianParallax = 0.0;
+
+            if (!recoveryParallaxAngles.empty()) {
+
+                std::sort(
+                    recoveryParallaxAngles.begin(), recoveryParallaxAngles.end()
+                );
+
+                recoveryMedianParallax = recoveryParallaxAngles[recoveryParallaxAngles.size() / 2];
+            }
+
+
+            // Ratio de points 3D réellement valides
+            const double recoveryValid3DRatio =
+                recoveryInlierPreviousPoints.empty() ? 
+                    0.0 : static_cast<double>(recoveryValid3DPoints) / static_cast<double>(recoveryInlierPreviousPoints.size());
+
+            // Verdict final
+            const bool validRecoveryBootstrapCandidate =
+                recoveryValid3DPoints >= minimumRecoveryValid3DPoints &&
+                recoveryValid3DRatio >= minimumRecoveryValid3DRatio;
+
+            bool recoveryConfirmedThisFrame = false;
+
+            if (validRecoveryBootstrapCandidate) {
+
+                ++validRecoveryBootstrapCandidates;
+
+                // Confirmation temporelle du re-bootstrap
+                //
+                // Un seul bon candidat ne suffit pas encore.
+                // On demande un deuxième candidat 3D valide suffisamment
+                // proche temporellement.
+                if (!recoveryBootstrapConfirmed) {
+                    if (lastValidRecoveryBootstrapFrameIndex >= 0) {
+
+                        const int recoveryConfirmationGap = frameIndex - lastValidRecoveryBootstrapFrameIndex;
+
+                        if (recoveryConfirmationGap <= maximumRecoveryConfirmationGapFrames) {
+
+                            recoveryBootstrapConfirmed = true;
+                            recoveryConfirmedThisFrame = true;
+                            ++recoveryConfirmationEvents;
+
+                            std::cout << "[RECOVERY CONFIRMED] frame "
+                                      << frameIndex
+                                      << " | previous candidate: "
+                                      << lastValidRecoveryBootstrapFrameIndex
+                                      << " | gap: "
+                                      << recoveryConfirmationGap
+                                      << " frames"
+                                      << " | maximum allowed: "
+                                      << maximumRecoveryConfirmationGapFrames
+                                      << '\n';
+                        }
+                        else {
+                            std::cout << "[RECOVERY CANDIDATE REARMED] frame "
+                                      << frameIndex
+                                      << " | previous candidate: "
+                                      << lastValidRecoveryBootstrapFrameIndex
+                                      << " | gap: "
+                                      << recoveryConfirmationGap
+                                      << " frames"
+                                      << " | maximum allowed: "
+                                      << maximumRecoveryConfirmationGapFrames
+                                      << '\n';
+                        }
+                    }
+                    else {
+                        std::cout << "[RECOVERY CANDIDATE ARMED] frame "
+                                  << frameIndex
+                                  << '\n';
+                    }
+
+
+                    // Ce candidat devient la référence temporelle du prochain candidat valide.
+                    lastValidRecoveryBootstrapFrameIndex = frameIndex;
+                }
+            }
+
+            // Diagnostic
+            std::cout << "[RECOVERY 3D] reference: "
+                      << recoveryReferenceFrameIndex
+                      << " -> current: "
+                      << frameIndex
+                      << " | pose inliers: "
+                      << recoveryInlierPreviousPoints.size()
+                      << " | valid 3D: "
+                      << recoveryValid3DPoints
+                      << " | valid ratio: "
+                      << recoveryValid3DRatio
+                      << " | median parallax: "
+                      << recoveryMedianParallax
+                      << " deg"
+                      << " | low-parallax rejected: "
+                      << recoveryLowParallaxRejected
+                      << " | reprojection rejected: "
+                      << recoveryReprojectionRejected
+                      << " | REBOOT CANDIDATE: "
+                      << (validRecoveryBootstrapCandidate ? "yes" : "no")
+                      << '\n';
+
+
+            if (recoveryConfirmedThisFrame) {
+
+                // ---------------------------------------------------------------------------
+                // Nouveau segment monoculaire
+                //
+                // La frame recoveryReferenceFrameIndex définit le nouveau repère local :
+                //
+                //     Rcw = I
+                //     tcw = 0
+                //
+                // La frame courante possède la pose [recoveryRotation | recoveryTranslation].
+                //
+                // Il n'existe PAS de transformation métrique connue permettant
+                // de recoller rigoureusement ce segment à l'ancien.
+                // ---------------------------------------------------------------------------
+                const int recoveryBootstrapReferenceFrameIndex = recoveryReferenceFrameIndex;
+
+                ++trajectorySegmentId;
+                ++recoveryRebootstrapEvents; 
+
+                recoveryPostValidationPending = true;
+
+                recoveryPostValidationSuccessfulPnP = 0;
+                recoveryPostValidationSegmentId = trajectorySegmentId;
+
+                // Remplacement de l'ancienne carte
+                mapPoints = recoveryBootstrapMapPoints;
+                mapDescriptors = recoveryBootstrapMapDescriptors.clone();
+
+
+                mapPointQualities.clear();
+
+                mapPointQualities.resize(mapPoints.size());
+
+
+                for (MapPointQuality& quality : mapPointQualities) {
+                    quality.creationFrameIndex = frameIndex;
+                    quality.lastSeenFrameIndex = frameIndex;
+                    quality.lastMatchedFrameIndex = frameIndex;
+                }
+
+
+                // Nouveaux IDs.
+                //
+                // nextMapPointId n'est PAS remis à zéro : les IDs restent uniques sur toute l'exécution.
+                mapPointIds.clear();
+
+                mapPointIds.reserve(mapPoints.size());
+
+
+                for (std::size_t i = 0; i < mapPoints.size(); ++i) {
+                    mapPointIds.push_back(nextMapPointId++);
+                }
+
+
+                if (mapPoints.size() != static_cast<std::size_t>(mapDescriptors.rows) ||
+                    mapPoints.size() != mapPointQualities.size() || 
+                    mapPoints.size() != mapPointIds.size()) {
+
+                    std::cerr << "Error: recovery map invariant broken"
+                              << " | points: "
+                              << mapPoints.size()
+                              << " | descriptors: "
+                              << mapDescriptors.rows
+                              << " | qualities: "
+                              << mapPointQualities.size()
+                              << " | IDs: "
+                              << mapPointIds.size()
+                              << '\n';
+
+                    return;
+                }
+
+
+                // Les exclusions BA appartenaient à l'ancienne carte.
+                excludedFromLocalBundleAdjustment.clear();
+
+                // Le BA ne doit jamais mélanger deux segments ayant des repères / échelles monoculaires indépendants.
+                keyframeHistory.clear();
+
+                // Première keyframe du nouveau segment : frame de référence de la paire de récupération.
+                const cv::Mat recoveryReferenceRotation = cv::Mat::eye(3, 3, CV_64F);
+
+                const cv::Mat recoveryReferenceTranslation = cv::Mat::zeros(3, 1, CV_64F);
+
+
+                KeyframeRecord recoveryReferenceRecord;
+
+                if (!createKeyframeRecord(
+                        recoveryBootstrapReferenceFrameIndex,
+                        recoveryReferenceKeypoints,
+                        recoveryBootstrapReferenceMapPointIndices,
+                        mapPointIds,
+                        recoveryReferenceRotation, recoveryReferenceTranslation,
+                        recoveryReferenceRecord)) {
+
+                    std::cerr << "Error: could not create recovery reference keyframe.\n";
+                    return;
+                }
+
+                keyframeHistory.push_back(std::move(recoveryReferenceRecord));
+
+                // Deuxième keyframe = frame actuelle
+                KeyframeRecord recoveryCurrentRecord;
+
+                if (!createKeyframeRecord(
+                        frameIndex,
+                        currentKeypoints,
+                        recoveryBootstrapCurrentMapPointIndices,
+                        mapPointIds,
+                        recoveryRotation, recoveryTranslation,
+                        recoveryCurrentRecord)) {
+
+                    std::cerr << "Error: could not create recovery current keyframe.\n";
+
+                    return;
+                }
+
+
+                keyframeHistory.push_back(std::move(recoveryCurrentRecord));
+
+
+                // La frame courante devient l'ancre active.
+                keyframeFrameIndex = frameIndex;
+
+                lastSelectedKeyframeFrameIndex = frameIndex;
+
+                keyframeKeypoints = currentKeypoints;
+
+                keyframeDescriptors = currentDescriptors.clone();
+
+                keyframeMapPointIndices = recoveryBootstrapCurrentMapPointIndices;
+
+                keyframeWorldToCameraRotation = recoveryRotation.clone();
+                keyframeTranslationVector = recoveryTranslation.clone();
+
+
+                // État de pose du nouveau segment
+                worldFromCameraRotation = recoveryRotation.t();
+                cameraPositionWorld = -recoveryRotation.t() * recoveryTranslation;
+                lastAcceptedPoseFrameIndex = frameIndex;
+
+
+                // L'échelle du nouveau segment vient d'être réinitialisée.
+                // L'historique de mouvement de l'ancien segment n'est donc
+                // plus comparable.
+                recentNormalizedStepDistances.clear();
+
+
+                // La frame actuelle devient la nouvelle frame fiable.
+                previousGray = gray.clone();
+                previousKeypoints = currentKeypoints;
+                previousDescriptors = currentDescriptors.clone();
+
+                mapInitialized = true;
+
+                ++successfulPoseSteps;
+
+
+                // CSV : origine du nouveau segment.
+                //
+                // On écrit rétroactivement la frame de référence puisque
+                // aucune pose valide n'avait été enregistrée pour elle.
+                trajectoryFile << recoveryBootstrapReferenceFrameIndex
+                               << ","
+                               << static_cast<double>(recoveryBootstrapReferenceFrameIndex) / fps
+                               << ",0,0,0,0,0,1,"
+                               << trajectorySegmentId
+                               << '\n';
+
+
+                const double recoveryX = cameraPositionWorld.at<double>(0, 0);
+                const double recoveryY = cameraPositionWorld.at<double>(1, 0);
+                const double recoveryZ = cameraPositionWorld.at<double>(2, 0);
+
+
+                trajectoryFile << frameIndex
+                               << ","
+                               << static_cast<double>(frameIndex) / fps
+                               << ","
+                               << recoveryX
+                               << ","
+                               << recoveryY
+                               << ","
+                               << recoveryZ
+                               << ","
+                               << recoveryGoodMatches.size()
+                               << ","
+                               << recoveryPoseInliers
+                               << ",1,"
+                               << trajectorySegmentId
+                               << '\n';
+
+
+                std::cout << "[RECOVERY REBOOT] segment "
+                          << trajectorySegmentId
+                          << " | reference frame: "
+                          << recoveryBootstrapReferenceFrameIndex
+                          << " | current frame: "
+                          << frameIndex
+                          << " | new map points: "
+                          << mapPoints.size()
+                          << '\n';
+
+                std::cout << "[RECOVERY VALIDATION ARMED] segment "
+                          << recoveryPostValidationSegmentId
+                          << " | required consecutive PnP: "
+                          << requiredSuccessfulPnPForStableRecovery
+                          << '\n';
+                        
+
+                printLocalBundleAdjustmentConnectivity(keyframeHistory, mapPointIds, 5);
+
+
+                // Ceci remet trackingLost à false et nettoie les buffers de récupération.
+                registerTrackingSuccess(frameIndex);
+
+                return;
+            }
+
+            // La frame courante devient la référence locale
+            // de la prochaine tentative.
+            advanceRecoveryReference();
+        };
+
+        
         // ---------------------------------------------------------------
         // Localisation par rapport à la carte 3D existante
         // ---------------------------------------------------------------
@@ -3115,6 +3961,9 @@ int main(int argc, char* argv[]) {
                           << pnpObjectPoints.size()
                           << " 3D-2D matches\n";
 
+                registerTrackingFailure(frameIndex, "insufficient 3D-2D matches");
+                tryRecoveryGeometry("insufficient 3D-2D matches");
+
                 ++frameIndex;
                 continue;
             }
@@ -3126,16 +3975,10 @@ int main(int argc, char* argv[]) {
 
             const bool pnpSuccess = 
                 cv::solvePnPRansac(
-                    pnpObjectPoints,
-                    pnpImagePoints,
-                    cameraMatrix,
-                    distortionCoefficients,
-                    rotationVector,
-                    translationVector,
-                    false,
-                    100,
-                    3.0,
-                    0.99,
+                    pnpObjectPoints, pnpImagePoints,
+                    cameraMatrix, distortionCoefficients,
+                    rotationVector, translationVector,
+                    false, 100, 3.0, 0.99,
                     pnpInliers,
                     cv::SOLVEPNP_ITERATIVE
                 );
@@ -3150,6 +3993,9 @@ int main(int argc, char* argv[]) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : solvePnPRansac failed\n";
+
+                registerTrackingFailure(frameIndex, "solvePnPransac failed");
+                tryRecoveryGeometry("solvePnPransac failed");
 
                 ++frameIndex;
                 continue;
@@ -3176,14 +4022,15 @@ int main(int argc, char* argv[]) {
                           << pnpInlierRatio
                           << '\n';
 
+                registerTrackingFailure(frameIndex, "insufficient PnP inliers");
+                tryRecoveryGeometry("insufficient PnP inliers");
                 ++frameIndex;
                 continue;
             }
 
             // Cas "sparse but clean": 
             // entre 15 & 19 inliers, on demande au moins 60%
-            if (pnpInliers.rows < 20 &&
-                pnpInlierRatio < minimumSparsePnPInlierRatio) {
+            if (pnpInliers.rows < 20 && pnpInlierRatio < minimumSparsePnPInlierRatio) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : sparse PnP"
@@ -3193,6 +4040,8 @@ int main(int argc, char* argv[]) {
                           << pnpInlierRatio
                           << '\n';
 
+                registerTrackingFailure(frameIndex, "sparse PnP rejected");
+                tryRecoveryGeometry("sparse PnP rejected");
                 ++frameIndex;
                 continue;
             }
@@ -3213,6 +4062,8 @@ int main(int argc, char* argv[]) {
                           << pnpInlierRatio
                           << '\n';
 
+                registerTrackingFailure(frameIndex, "low PnP inlier ratio");
+                tryRecoveryGeometry("low PnP inlier ratio");
                 ++frameIndex;
                 continue;
             }
@@ -3293,8 +4144,7 @@ int main(int argc, char* argv[]) {
                     std::max(minimumMaximumNormalizedStep, maximumStepMedianMultiplier * recentMedianStep);
             }
 
-            if (recentNormalizedStepDistances.size() >= motionHistorySize &&
-                normalizedStepDistance > maximumAllowedStep) {
+            if (recentNormalizedStepDistances.size() >= motionHistorySize && normalizedStepDistance > maximumAllowedStep) {
                 std::cout << "[PNP SKIP] frame "
                           << frameIndex
                           << " : motion jump"
@@ -3306,9 +4156,14 @@ int main(int argc, char* argv[]) {
                           << maximumAllowedStep
                           << '\n';
 
+                registerTrackingFailure(frameIndex, "motion consistency rejection");
+                tryRecoveryGeometry("motion consistency rejection");
                 ++frameIndex;
                 continue;
             }
+
+            // La pose PnP a maintenant passé toutes les validations
+            registerTrackingSuccess(frameIndex);
 
             const cv::Mat cameraPositionWorldBeforeAcceptedStep = cameraPositionWorld.clone();
 
@@ -3352,20 +4207,47 @@ int main(int argc, char* argv[]) {
 
             ++successfulPoseSteps;
 
+            if (recoveryPostValidationPending) {
+                ++recoveryPostValidationSuccessfulPnP;
+
+                std::cout << "[RECOVERY VALIDATION PNP] segment "
+                    << recoveryPostValidationSegmentId
+                    << " | frame: "
+                    << frameIndex
+                    << " | consecutive successful PnP: "
+                    << recoveryPostValidationSuccessfulPnP
+                    << "/"
+                    << requiredSuccessfulPnPForStableRecovery
+                    << '\n';
+
+                if (recoveryPostValidationSuccessfulPnP >= requiredSuccessfulPnPForStableRecovery) {
+                    ++stableRecoveryRebootstrapEvents;
+
+                    std::cout << "[RECOVERY STABLE] segment "
+                        << recoveryPostValidationSegmentId
+                        << " | confirmed at frame "
+                        << frameIndex
+                        << " | consecutive successful PnP: "
+                        << recoveryPostValidationSuccessfulPnP
+                        << '\n';
+
+
+                    recoveryPostValidationPending = false;
+                    recoveryPostValidationSuccessfulPnP = 0;
+                    recoveryPostValidationSegmentId = -1;
+                }
+            }
+
             // -----------------------------------------------------------
             // Décision adaptative de création d'une nouvelle keyframe
             // -----------------------------------------------------------
-            const int framesSinceLastKeyframe = 
-                frameIndex - lastSelectedKeyframeFrameIndex;
+            const int framesSinceLastKeyframe = frameIndex - lastSelectedKeyframeFrameIndex;
 
-            // Trop proche de la dernière keyframe:
-            // on préfère attendre davantage de baseline
-            const bool enoughFrameSeparation = 
-                framesSinceLastKeyframe >= minimumKeyframeGapFrames;
+            // Trop proche de la dernière keyframe: on préfère attendre davantage de baseline
+            const bool enoughFrameSeparation = framesSinceLastKeyframe >= minimumKeyframeGapFrames;
 
             // Même avec un bon tracking, on ne conserve pas une keyframe indéfiniment
-            const bool maximumGapReached = 
-                framesSinceLastKeyframe >= maximumKeyframeGapFrames;
+            const bool maximumGapReached = framesSinceLastKeyframe >= maximumKeyframeGapFrames;
 
             // ---------------------------------------------------------
             // Qualité actuelle du tracking
@@ -3841,6 +4723,8 @@ int main(int argc, char* argv[]) {
                            << pnpInliers.rows
                            << ","
                            << (shouldCreateKeyframe ? 1 : 0)
+                           << ","
+                           << trajectorySegmentId
                            << '\n';
 
             std::cout << "[PNP OK] frame "
@@ -4379,6 +5263,8 @@ int main(int argc, char* argv[]) {
                        << poseInliers
                        << ","
                        << (mapInitialized ? 1 : 0)
+                       << ","
+                       << trajectorySegmentId
                        << '\n';
 
 
@@ -4425,6 +5311,63 @@ int main(int argc, char* argv[]) {
     std::cout << "Successful pose steps: "
                 << successfulPoseSteps
                 << '\n';
+
+    std::cout << "Tracking loss events: "
+              << trackingLossEvents
+              << '\n';
+
+    std::cout << "Longest tracking failure streak: "
+              << longestTrackingFailureStreak
+              << '\n';
+
+    std::cout << "Recovery geometry attempts: "
+              << recoveryGeometryAttempts
+              << '\n';
+
+    std::cout << "Usable recovery geometry candidates: "
+              << usableRecoveryGeometryCandidates
+              << '\n';
+
+    std::cout << "Recovery 3D validation attempts: "
+              << recovery3DValidationAttempts
+              << '\n';
+
+    std::cout << "Valid recovery bootstrap candidates: "
+              << validRecoveryBootstrapCandidates
+              << '\n';
+
+    std::cout << "Recovery confirmation events: "
+              << recoveryConfirmationEvents
+              << '\n';
+
+    std::cout << "Recovery re-bootstrap events: "
+              << recoveryRebootstrapEvents
+              << '\n';
+
+    std::cout << "Stable recovery re-bootstrap events: "
+              << stableRecoveryRebootstrapEvents
+              << '\n';
+
+    std::cout << "Unstable recovery re-bootstrap events: "
+              << unstableRecoveryRebootstrapEvents
+              << '\n';
+
+    std::cout << "Recovery post-validation pending at end: "
+              << (recoveryPostValidationPending ? "yes" : "no")
+              << '\n';
+
+    std::cout << "Trajectory segments: "
+              << trajectorySegmentId + 1
+              << '\n';
+
+    std::cout << "Recovery bootstrap confirmed at end: "
+              << (recoveryBootstrapConfirmed ? "yes" : "no")
+              << '\n';
+
+
+    std::cout << "Final tracking state: "
+              << (trackingLost ? "LOST" : "TRACKING")
+              << '\n';
 
     std::cout << "Trajectory saved to: "
                 << outputCsvPath.string()
