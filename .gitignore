@@ -20,3 +20,18 @@ data/
 
 # Résultats produits par nos expérimentations.
 results/
+
+# Visual Studio / Windows
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# OS files
+Thumbs.db
+.DS_Store
